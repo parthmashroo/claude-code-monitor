@@ -42,7 +42,16 @@ Every other Claude Code usage tool either:
 - Only works in **terminal TUI mode** — useless if you use VS Code chat
 - **Estimates** 5h/7d rate limits from JSONL files instead of showing real numbers
 
-This widget calls `api.anthropic.com/api/oauth/usage` directly — the **same private endpoint** the VS Code "Account & Usage" panel uses internally. You get the exact utilization % and real countdown to reset, always visible, no clicking required.
+This widget reads the same usage data Claude Code already has on your machine and keeps it always visible — no clicking, no panel, no context switching. The rate limit % and reset time are real numbers from Anthropic's servers, not guesses.
+
+## Security & privacy
+
+**Nothing leaves your machine except one API call to fetch your own usage stats from Anthropic** — the same call the official VS Code extension makes when you open "Account & Usage."
+
+- Reads only files Claude Code already owns on your machine
+- No analytics, no telemetry, no third-party servers
+- Fully open source — every line is in `monitor.py` (~200 lines, single file)
+- Token never shared, logged, or transmitted anywhere except back to Anthropic to fetch your own data
 
 ---
 
@@ -145,26 +154,11 @@ Right-click anywhere on the widget to open the picker. 10 themes — 8 dark, 2 l
 
 ### Rate limits (real data, not estimates)
 
-Claude Code authenticates with claude.ai using OAuth. The token lives at:
-```
-~/.claude/.credentials.json → claudeAiOauth.accessToken
-```
+Claude Code already authenticates with Anthropic on your behalf and stores that session locally. This widget uses that existing local session to ask Anthropic one question: *"how much of this user's quota has been used?"*
 
-This widget uses that same token to call:
-```
-GET https://api.anthropic.com/api/oauth/usage
-Authorization: Bearer <token>
-```
+Anthropic responds with the exact utilization % and reset timestamp for both the 5h and 7d windows — the same numbers shown in the VS Code "Account & Usage" panel. No reverse engineering of limits, no guessing from file sizes, no scraping.
 
-Response:
-```json
-{
-  "five_hour": { "utilization": 93.0, "resets_at": "2026-06-28T09:49:59Z" },
-  "seven_day": { "utilization": 25.0, "resets_at": "2026-06-29T22:00:00Z" }
-}
-```
-
-The API is polled every 60 seconds. The countdown (`1h44m`) recalculates every 5 seconds from the stored `resets_at` timestamp — so it ticks live without hammering the API.
+The API is polled every 60 seconds. The countdown (`1h44m`) recalculates every 5 seconds from the stored `resets_at` — so it ticks live without hammering the API.
 
 ### Token/cost data
 
