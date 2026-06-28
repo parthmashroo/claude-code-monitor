@@ -8,7 +8,14 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/parthmashroo/claude-code-monitor)
 [![Stars](https://img.shields.io/github/stars/parthmashroo/claude-code-monitor?style=social)](https://github.com/parthmashroo/claude-code-monitor/stargazers)
+[![Last Commit](https://img.shields.io/github/last-commit/parthmashroo/claude-code-monitor)](https://github.com/parthmashroo/claude-code-monitor/commits/master)
+[![Issues](https://img.shields.io/github/issues/parthmashroo/claude-code-monitor)](https://github.com/parthmashroo/claude-code-monitor/issues)
 [![Zero deps](https://img.shields.io/badge/dependencies-zero-brightgreen)](https://github.com/parthmashroo/claude-code-monitor)
+[![Works in VS Code](https://img.shields.io/badge/works%20in-VS%20Code%20chat-007ACC?logo=visualstudiocode&logoColor=white)](https://github.com/parthmashroo/claude-code-monitor)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-compatible-D97706?logo=anthropic&logoColor=white)](https://github.com/parthmashroo/claude-code-monitor)
+[![Real API](https://img.shields.io/badge/rate%20limits-real%20API%20data%2C%20not%20estimates-8B5CF6)](https://github.com/parthmashroo/claude-code-monitor)
+
+**real rate limits · VS Code chat mode · 10 themes · zero deps · auto-startup · Python stdlib only**
 
 ![Widget on Desktop](screenshots/widget-on-desktop.png)
 
