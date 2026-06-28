@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+config.json
+session_data.json
+rate_limits.json
