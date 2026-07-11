@@ -387,6 +387,8 @@ class Monitor(tk.Tk):
         self._fh_misses = self._sd_misses = 0
         self._fh_visible = self._sd_visible = True
         self._fh_user_hidden = self._sd_user_hidden = False  # manual right-click toggle, independent of auto-hide
+        self._hover_enabled = True   # right-click toggle for the hover breakdown panel
+        self._spark_enabled = True   # right-click toggle for the sparkline
         self._fh_shown = self._sd_shown = False  # has ever had real data
         self._cur_w = 560
 
@@ -608,7 +610,7 @@ class Monitor(tk.Tk):
         put(d["tok_out"], C["A1"], FV, after=4)
         put(d["cost"], d["cost_col"], FVS, after=4)
         put(d["burn_txt"], C["DIM"], FL, after=6)
-        if len(self._history) >= 2:
+        if self._spark_enabled and len(self._history) >= 2:
             # only reserve the sparkline's space once there's an actual line
             # to draw -- with <2 points it was a near-invisible flat dash
             # that just read as a big unexplained gap before "sess".
@@ -726,6 +728,8 @@ class Monitor(tk.Tk):
     # box compared against live pointer position on every <Motion> event
     # sidesteps that entirely.
     def _on_hover_motion(self, e):
+        if not self._hover_enabled:
+            return
         z = self._hover_zone
         if z and z[0] <= e.x <= z[2] and z[1] <= e.y <= z[3]:
             self._show_hover(e)
@@ -792,6 +796,14 @@ class Monitor(tk.Tk):
             self._hover_hide_job = None
         self._hover_hide_job = self.after(120, do_hide)
 
+    def _hide_hover_now(self):
+        if self._hover_hide_job:
+            self.after_cancel(self._hover_hide_job)
+            self._hover_hide_job = None
+        if self._hover_win:
+            self._hover_win.destroy()
+            self._hover_win = None
+
     # ── theme ─────────────────────────────────────────────────────────────────
     def _open_theme_menu(self, e):
         C    = self.C
@@ -801,14 +813,25 @@ class Monitor(tk.Tk):
 
         fh_var = tk.BooleanVar(value=not self._fh_user_hidden)
         sd_var = tk.BooleanVar(value=not self._sd_user_hidden)
+        hover_var = tk.BooleanVar(value=self._hover_enabled)
+        spark_var = tk.BooleanVar(value=self._spark_enabled)
         def toggle_fh():
             self._fh_user_hidden = not fh_var.get()
             self._layout()
         def toggle_sd():
             self._sd_user_hidden = not sd_var.get()
             self._layout()
+        def toggle_hover():
+            self._hover_enabled = hover_var.get()
+            if not self._hover_enabled:
+                self._hide_hover_now()
+        def toggle_spark():
+            self._spark_enabled = spark_var.get()
+            self._layout()
         menu.add_checkbutton(label="Show 5h", variable=fh_var, command=toggle_fh, font=("Segoe UI", 9))
         menu.add_checkbutton(label="Show 7d", variable=sd_var, command=toggle_sd, font=("Segoe UI", 9))
+        menu.add_checkbutton(label="Hover panel", variable=hover_var, command=toggle_hover, font=("Segoe UI", 9))
+        menu.add_checkbutton(label="Sparkline", variable=spark_var, command=toggle_spark, font=("Segoe UI", 9))
         menu.add_separator()
 
         for name in THEME_NAMES:
