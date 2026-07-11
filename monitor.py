@@ -318,6 +318,7 @@ class Monitor(tk.Tk):
         self._stop = threading.Event()
         self._fh_misses = self._sd_misses = 0
         self._fh_visible = self._sd_visible = True
+        self._fh_shown = self._sd_shown = False  # has ever had real data
         self._cur_w = 560
 
         # cached display state — _layout() redraws entirely from this, so a
@@ -332,7 +333,12 @@ class Monitor(tk.Tk):
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.95)
+        # 0.95 was near-opaque -- with no live blur-behind (gated by the OS
+        # Transparency-effects setting, off on this machine, no per-app
+        # override exists), a real see-through window is the only honest way
+        # to make "what's behind it" actually visible instead of painting a
+        # gradient and calling it glass.
+        self.attributes("-alpha", 0.80)
         self.configure(bg=self.C["BG"])
         x = cfg.get("x", 40); y = cfg.get("y", 40)
         x = max(0, min(x, self.winfo_screenwidth()  - self._cur_w))
@@ -354,32 +360,31 @@ class Monitor(tk.Tk):
             apply_glass(self.winfo_id(), self.C["BG"])
         self._start()
 
-    # ── background: gradient + specular highlight + shadow edge ────────────────
+    # ── background: calm neutral surface + thin gradient accent + shadow edge ──
+    # The reference designs put color on the page backdrop and in accent
+    # elements (a chart line, a progress fill, a thin edge) — the content
+    # surface itself stays clean and neutral so text has consistent contrast.
+    # Painting the full multi-hue gradient behind every label was the actual
+    # "jQuery2 kind of design" tell: it competed with the text instead of
+    # framing it. Reserve the theme's gradient for a thin top accent stripe.
     def _redraw_background(self, w, h):
         cv = self.canvas
         cv.delete("bg")
+        cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
+
         stops = self._grad
         n = len(stops) - 1
         step = 2
+        accent_h = 3
         for xx in range(0, w, step):
             t = xx / max(w - 1, 1)
             seg = min(int(t * n), n - 1)
-            # hue-wheel interpolation between stops: RGB-lerping between
-            # unrelated hues (cyan->green->amber->red) crosses through
-            # desaturated brown "mud" — going around the wheel keeps every
-            # intermediate color as clean as its endpoints.
             color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
-            cv.create_rectangle(xx, 0, xx + step, h, fill=color, outline="", tags=("bg",))
-        # Liquid-Glass-style light catch: a soft multi-band falloff near the
-        # top edge, not a single flat stripe (and no stipple dithering —
-        # that's a hard 1990s GDI look, not a glass sheen).
-        band_h = max(4, h // 3)
-        bands = 5
-        for i in range(bands):
-            t0, t1 = i / bands, (i + 1) / bands
-            y0, y1 = 1 + t0 * band_h, 1 + t1 * band_h
-            hl = _mix("#ffffff", self.C["BG"], 0.35 + t0 * 0.55)
-            cv.create_rectangle(0, y0, w, y1, fill=hl, outline="", tags=("bg",))
+            cv.create_rectangle(xx, 0, xx + step, accent_h, fill=color, outline="", tags=("bg",))
+
+        hl = _mix("#ffffff", self.C["BG"], 0.62)  # soft light catch just under the accent stripe
+        cv.create_rectangle(0, accent_h, w, accent_h + 3, fill=hl, outline="", tags=("bg",))
+
         shadow = _mix("#000000", self.C["BG"], 0.7)
         cv.create_line(0, h - 1, w, h - 1, fill=shadow, tags=("bg",))
         cv.tag_lower("bg")
@@ -387,7 +392,7 @@ class Monitor(tk.Tk):
     def _build_close(self):
         C, cv = self.C, self.canvas
         self._close_item = cv.create_text(0, self.H // 2, text="×", fill=C["MUT"],
-                                          font=("Consolas", 10, "bold"), tags=("close",))
+                                          font=("Segoe UI", 11, "bold"), tags=("close",))
         cv.tag_bind("close", "<Button-1>", lambda e: self._close())
         cv.tag_bind("close", "<Enter>", lambda e: (cv.itemconfig(self._close_item, fill=C["HOT"]),
                                                     cv.config(cursor="hand2")))
@@ -403,18 +408,12 @@ class Monitor(tk.Tk):
         C, cv, d = self.C, self.canvas, self._d
         cv.delete("content")
         mid = self.H // 2
-        FL, FV, FVS, FS = ("Consolas", 8), ("Consolas", 9, "bold"), ("Consolas", 8, "bold"), ("Consolas", 9)
+        FL, FV, FVS, FS = ("Segoe UI", 8), ("Segoe UI Semibold", 10), ("Segoe UI Semibold", 9), ("Segoe UI", 9)
         x = self.PAD_L
 
         def put(text, color, font=FV, before=0, after=4):
             nonlocal x
             x += before
-            # a dark 1px-offset shadow copy behind the real glyph keeps text
-            # readable no matter which gradient color lands underneath it —
-            # without this, DIM/FG text washes out over the lighter zones
-            # of the gradient.
-            shadow = _mix(color, "#000000", 0.8)
-            cv.create_text(x + 1, mid + 1, text=text, fill=shadow, font=font, anchor="w", tags=("content", "shadow"))
             item = cv.create_text(x, mid, text=text, fill=color, font=font, anchor="w", tags=("content",))
             bbox = cv.bbox(item)
             x += (bbox[2] - bbox[0] if bbox else 0) + after
@@ -490,7 +489,7 @@ class Monitor(tk.Tk):
                        bd=0, relief="flat")
         for name in THEME_NAMES:
             label = f"* {name}" if name == self._tname else f"  {name}"
-            menu.add_command(label=label, font=("Consolas", 9),
+            menu.add_command(label=label, font=("Segoe UI", 9),
                              command=lambda n=name: self._switch_theme(n))
         menu.post(e.x_root, e.y_root)
 
@@ -553,27 +552,35 @@ class Monitor(tk.Tk):
         self._layout()
 
     def _apply_limits(self, lim, relayout=True):
+        # Once a segment has shown real data, a later transient miss (a
+        # single dropped fetch, a rate-limited API call) freezes it on its
+        # last-known values instead of hiding it — hiding/showing on every
+        # 60s poll was the actual complaint, not the auto-hide concept
+        # itself. Only a segment that has *never* had data hides after
+        # repeated misses, since there's nothing meaningful to freeze on.
         C, d = self.C, self._d
         fh_pct = lim.get("fh_pct")
         sd_pct = lim.get("sd_pct")
         if fh_pct is None:
             self._fh_misses += 1
-            if self._fh_misses == self.HIDE_AFTER:
+            if not self._fh_shown and self._fh_misses == self.HIDE_AFTER:
                 self._fh_visible = False
         else:
             self._fh_misses = 0
             self._fh_visible = True
+            self._fh_shown = True
             pct = int(fh_pct)
             col = _rl_color(pct, C)
             d["fh_pct_txt"] = f"{pct}%"; d["fh_col"] = col
             d["fh_cd"] = _countdown(lim.get("fh_resets_at", ""))
         if sd_pct is None:
             self._sd_misses += 1
-            if self._sd_misses == self.HIDE_AFTER:
+            if not self._sd_shown and self._sd_misses == self.HIDE_AFTER:
                 self._sd_visible = False
         else:
             self._sd_misses = 0
             self._sd_visible = True
+            self._sd_shown = True
             pct = int(sd_pct)
             col = _rl_color(pct, C)
             d["sd_pct_txt"] = f"{pct}%"; d["sd_col"] = col
