@@ -27,6 +27,7 @@ def load_cfg():
 
 def save_cfg(**kw):
     c = load_cfg(); c.update(kw)
+    CFG.parent.mkdir(parents=True, exist_ok=True)
     CFG.write_text(json.dumps(c))
 
 _P = {
