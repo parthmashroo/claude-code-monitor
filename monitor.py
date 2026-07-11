@@ -234,8 +234,9 @@ class Monitor(tk.Tk):
         drag.bind("<B1-Motion>",     self._drag)
 
         # today tokens
+        self._lbl(row, "tdy", "DIM", ("Consolas", 8)).pack(side="left")
         self._tok  = self._lbl(row, "--",  "A1",   ("Consolas", 9, "bold"))
-        self._tok.pack(side="left", padx=(0, 0))
+        self._tok.pack(side="left", padx=(3, 0))
         self._cost = self._lbl(row, "",    "WARN",  ("Consolas", 9))
         self._cost.pack(side="left", padx=(4, 0))
 
@@ -340,8 +341,9 @@ class Monitor(tk.Tk):
     def _apply_local(self, t, st, msgs):
         C = self.C
         cost_c = C["HOT"] if t["cost"] > 10 else C["WARN"] if t["cost"] > 3 else C["OK"]
+        prefix = "" if t.get("confident", True) else "~"
         self._tok.config(text=_k(t["total"]))
-        self._cost.config(text=_fc(t["cost"]), fg=cost_c)
+        self._cost.config(text=prefix + _fc(t["cost"]), fg=cost_c)
         self._sess.config(text=_k(st) if st else "--")
         self._msgs.config(text=f"{msgs}msg" if msgs else "")
         if self._limits:
