@@ -187,6 +187,7 @@ class Monitor(tk.Tk):
         self.C      = THEMES[self._tname]
         self._limits = {}
         self._dx = self._dy = 0
+        self._stop = threading.Event()
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -213,7 +214,7 @@ class Monitor(tk.Tk):
         close_btn = tk.Label(row, text=" × ", fg=C["MUT"], bg=C["BG"],
                              font=("Consolas", 9, "bold"), cursor="hand2")
         close_btn.pack(side="right", padx=(0, 2))
-        close_btn.bind("<Button-1>", lambda _: self.destroy())
+        close_btn.bind("<Button-1>", lambda _: self._close())
         close_btn.bind("<Enter>",    lambda e: close_btn.config(fg=C["HOT"]))
         close_btn.bind("<Leave>",    lambda e: close_btn.config(fg=C["MUT"]))
 
@@ -287,6 +288,10 @@ class Monitor(tk.Tk):
     def _switch_theme(self, name):
         save_cfg(theme=name, x=self.winfo_x(), y=self.winfo_y())
         subprocess.Popen([sys.executable, str(Path(__file__).resolve())])
+        self._close()
+
+    def _close(self):
+        self._stop.set()
         self.destroy()
 
     # ── drag ──────────────────────────────────────────────────────────────────
@@ -302,22 +307,23 @@ class Monitor(tk.Tk):
     # ── data refresh ──────────────────────────────────────────────────────────
     def _start(self):
         def run_local():
-            while True:
+            while not self._stop.is_set():
                 try:
                     t = load_today(); st, msgs = load_sess()
-                    self.after(0, self._apply_local, t, st, msgs)
+                    if not self._stop.is_set():
+                        self.after(0, self._apply_local, t, st, msgs)
                 except Exception: pass
-                time.sleep(5)
+                self._stop.wait(5)
 
         def run_api():
-            while True:
+            while not self._stop.is_set():
                 try:
                     lim = fetch_limits()
-                    if lim:
+                    if lim and not self._stop.is_set():
                         self._limits = lim
                         self.after(0, self._apply_limits, lim)
                 except Exception: pass
-                time.sleep(60)
+                self._stop.wait(60)
 
         threading.Thread(target=run_local, daemon=True).start()
         threading.Thread(target=run_api,   daemon=True).start()
