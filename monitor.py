@@ -190,6 +190,7 @@ def register_startup():
 
 class Monitor(tk.Tk):
     W = 560; H = 30
+    HIDE_AFTER = 3  # consecutive misses before hiding a rate-limit segment
 
     def __init__(self):
         super().__init__()
@@ -199,6 +200,7 @@ class Monitor(tk.Tk):
         self._limits = {}
         self._dx = self._dy = 0
         self._stop = threading.Event()
+        self._fh_misses = self._sd_misses = 0
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -359,18 +361,28 @@ class Monitor(tk.Tk):
         C = self.C
         fh_pct = lim.get("fh_pct")
         sd_pct = lim.get("sd_pct")
-        if fh_pct is not None:
+        if fh_pct is None:
+            self._fh_misses += 1
+            if self._fh_misses >= self.HIDE_AFTER:
+                self._fhbar.pack_forget(); self._fhpct.pack_forget(); self._fhcd.pack_forget()
+        else:
+            self._fh_misses = 0
             pct = int(fh_pct)
             col = _rl_color(pct, C)
             self._fhbar.config(text=_bar(pct), fg=col)
             self._fhpct.config(text=f"{pct}%", fg=col)
-        self._fhcd.config(text=_countdown(lim.get("fh_resets_at", "")))
-        if sd_pct is not None:
+            self._fhcd.config(text=_countdown(lim.get("fh_resets_at", "")))
+        if sd_pct is None:
+            self._sd_misses += 1
+            if self._sd_misses >= self.HIDE_AFTER:
+                self._sdbar.pack_forget(); self._sdpct.pack_forget(); self._sdcd.pack_forget()
+        else:
+            self._sd_misses = 0
             pct = int(sd_pct)
             col = _rl_color(pct, C)
             self._sdbar.config(text=_bar(pct), fg=col)
             self._sdpct.config(text=f"{pct}%", fg=col)
-        self._sdcd.config(text=_countdown(lim.get("sd_resets_at", "")))
+            self._sdcd.config(text=_countdown(lim.get("sd_resets_at", "")))
 
 
 if __name__ == "__main__":
