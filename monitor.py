@@ -535,13 +535,21 @@ class Monitor(tk.Tk):
         cv.create_rectangle(0, 0, w - 1, h - 1, outline=self.C["SEP"], fill="", tags=("bg",))
 
     def _build_close(self):
+        # Drawn as two crossing lines rather than a "x" text glyph -- the
+        # multiplication-sign glyph doesn't vertically center itself the
+        # same way regular text does in this font, no matter what y-anchor
+        # is used. Explicit line geometry centers exactly on `mid`, always.
         C, cv = self.C, self.canvas
-        self._close_item = cv.create_text(0, self.H // 2, text="×", fill=C["MUT"],
-                                          font=("Segoe UI", 11, "bold"), tags=("close",))
+        r = max(3, round(4 * self._scale))
+        self._close_items = (
+            cv.create_line(0, 0, 0, 0, fill=C["MUT"], width=max(1, round(1.4 * self._scale)), tags=("close",)),
+            cv.create_line(0, 0, 0, 0, fill=C["MUT"], width=max(1, round(1.4 * self._scale)), tags=("close",)),
+        )
+        self._close_r = r
         cv.tag_bind("close", "<Button-1>", lambda e: self._close())
-        cv.tag_bind("close", "<Enter>", lambda e: (cv.itemconfig(self._close_item, fill=C["HOT"]),
+        cv.tag_bind("close", "<Enter>", lambda e: (cv.itemconfig("close", fill=C["HOT"]),
                                                     cv.config(cursor="hand2")))
-        cv.tag_bind("close", "<Leave>", lambda e: (cv.itemconfig(self._close_item, fill=C["MUT"]),
+        cv.tag_bind("close", "<Leave>", lambda e: (cv.itemconfig("close", fill=C["MUT"]),
                                                     cv.config(cursor="")))
 
     # ── layout: manual flex-row over Canvas items, since Canvas has no
@@ -599,7 +607,10 @@ class Monitor(tk.Tk):
             put(d["sd_cd"], C["DIM"], FL, after=0)
 
         total_w = max(x + self.PAD_R, 120)
-        cv.coords(self._close_item, total_w - 14, mid)
+        cx = total_w - round(14 * self._scale)
+        r = self._close_r
+        cv.coords(self._close_items[0], cx - r, mid - r, cx + r, mid + r)
+        cv.coords(self._close_items[1], cx - r, mid + r, cx + r, mid - r)
         if total_w != self._cur_w:
             self._cur_w = total_w
             cv.config(width=total_w)
