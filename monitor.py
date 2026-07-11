@@ -327,53 +327,68 @@ class Monitor(tk.Tk):
         self._msgs = self._lbl(row, "",    "DIM", ("Consolas", 8))
         self._msgs.pack(side="left", padx=(3, 0))
 
-        self._sep2 = self._lbl(row, " | ", "MUT", ("Consolas", 9))
-        self._sep2.pack(side="left")
-
-        # 5h bar
-        self._fh_label = self._lbl(row, "5h", "DIM", ("Consolas", 8))
-        self._fh_label.pack(side="left")
-        self._fhbar, self._fh_fill = self._make_bar(row)
-        self._fhpct = self._lbl(row, "",       "A1",  ("Consolas", 8, "bold"))
-        self._fhpct.pack(side="left", padx=(4, 0))
-        self._fhcd  = self._lbl(row, "",       "DIM", ("Consolas", 8))
-        self._fhcd.pack(side="left", padx=(3, 0))
-
-        self._sep3 = self._lbl(row, " | ", "MUT", ("Consolas", 9))
-        self._sep3.pack(side="left")
-
-        # 7d bar
-        self._sd_label = self._lbl(row, "7d", "DIM", ("Consolas", 8))
-        self._sd_label.pack(side="left")
-        self._sdbar, self._sd_fill = self._make_bar(row)
-        self._sdpct = self._lbl(row, "",       "A1",  ("Consolas", 8, "bold"))
-        self._sdpct.pack(side="left", padx=(4, 0))
-        self._sdcd  = self._lbl(row, "",       "DIM", ("Consolas", 8))
-        self._sdcd.pack(side="left", padx=(3, 0))
+        # 5h / 7d — each is a self-contained frame (leading separator baked in)
+        # so hiding/showing it is one pack_forget()/pack() call that can't
+        # desync from the rest of the row's packing order.
+        self._fh_frame = self._rl_group(row, "5h")
+        self._fhbar, self._fh_fill, self._fhpct, self._fhcd = self._rl_widgets(self._fh_frame)
+        self._sd_frame = self._rl_group(row, "7d")
+        self._sdbar, self._sd_fill, self._sdpct, self._sdcd = self._rl_widgets(self._sd_frame)
 
         # make full row draggable + right-click for theme
         for w in [row, self._tok_in, self._tok_out, self._cost, self._sess, self._msgs,
-                  self._fhbar, self._fhpct, self._fhcd, self._fh_label,
-                  self._sdbar, self._sdpct, self._sdcd, self._sd_label,
-                  self._sep1, self._sep2, self._sep3]:
+                  self._sep1]:
             w.bind("<ButtonPress-1>", self._press)
             w.bind("<B1-Motion>",     self._drag)
             w.bind("<Button-3>",      self._open_theme_menu)
 
-    BAR_W = 44; BAR_H = 8
+    BAR_W = 52; BAR_H = 10
+
+    def _rl_group(self, row, label_text):
+        """A rate-limit segment: its own leading separator + label, all one
+        unit so hide/show can't leave an orphaned separator or dead space."""
+        C = self.C
+        frame = tk.Frame(row, bg=C["BG"])
+        frame.pack(side="left")
+        sep = self._lbl(frame, " | ", "MUT", ("Consolas", 9))
+        sep.pack(side="left")
+        lbl = self._lbl(frame, label_text, "DIM", ("Consolas", 8))
+        lbl.pack(side="left")
+        for w in (frame, sep, lbl):
+            w.bind("<ButtonPress-1>", self._press)
+            w.bind("<B1-Motion>",     self._drag)
+            w.bind("<Button-3>",      self._open_theme_menu)
+        return frame
+
+    def _rl_widgets(self, frame):
+        C = self.C
+        bar, fill = self._make_bar(frame)
+        pct = self._lbl(frame, "", "A1", ("Consolas", 9, "bold"))
+        pct.pack(side="left", padx=(5, 0))
+        cd = self._lbl(frame, "", "DIM", ("Consolas", 8))
+        cd.pack(side="left", padx=(4, 0))
+        for w in (pct, cd):
+            w.bind("<ButtonPress-1>", self._press)
+            w.bind("<B1-Motion>",     self._drag)
+            w.bind("<Button-3>",      self._open_theme_menu)
+        return bar, fill, pct, cd
 
     def _make_bar(self, parent):
         C = self.C
         canvas = tk.Canvas(parent, width=self.BAR_W, height=self.BAR_H,
                            bg=parent["bg"], highlightthickness=0)
-        canvas.pack(side="left", padx=(4, 0))
-        canvas.create_rectangle(0, 0, self.BAR_W, self.BAR_H, fill=C["MUT"], outline="")
-        fill_id = canvas.create_rectangle(0, 0, 0, self.BAR_H, fill=C["OK"], outline="")
+        canvas.pack(side="left", padx=(5, 0))
+        canvas.create_rectangle(0, 0, self.BAR_W - 1, self.BAR_H - 1,
+                                fill=C["MUT"], outline=C["FG"])  # visible track border ("finish line")
+        fill_id = canvas.create_rectangle(1, 1, 1, self.BAR_H - 1, fill=C["OK"], outline="")
+        canvas.bind("<ButtonPress-1>", self._press)
+        canvas.bind("<B1-Motion>",     self._drag)
+        canvas.bind("<Button-3>",      self._open_theme_menu)
         return canvas, fill_id
 
     def _set_bar(self, canvas, fill_id, pct, color):
-        w = round(min(pct, 100) / 100 * self.BAR_W)
-        canvas.coords(fill_id, 0, 0, w, self.BAR_H)
+        w = max(1, round(min(pct, 100) / 100 * (self.BAR_W - 2)))
+        canvas.coords(fill_id, 1, 1, 1 + w, self.BAR_H - 1)
         canvas.itemconfig(fill_id, fill=color)
 
     def _resize_to_fit(self):
@@ -456,12 +471,19 @@ class Monitor(tk.Tk):
         resized = False
         if fh_pct is None:
             self._fh_misses += 1
-            if self._fh_misses == self.HIDE_AFTER:
-                self._fh_label.pack_forget(); self._fhbar.pack_forget()
-                self._fhpct.pack_forget(); self._fhcd.pack_forget(); self._sep2.pack_forget()
+            if self._fh_misses == self.HIDE_AFTER and self._fh_frame.winfo_manager():
+                self._fh_frame.pack_forget()
                 resized = True
         else:
             self._fh_misses = 0
+            if not self._fh_frame.winfo_manager():
+                # sd sits after fh in the row; if it's currently shown, fh must
+                # be reinserted before it to land back in the right order.
+                if self._sd_frame.winfo_manager():
+                    self._fh_frame.pack(side="left", before=self._sd_frame)
+                else:
+                    self._fh_frame.pack(side="left")
+                resized = True
             pct = int(fh_pct)
             col = _rl_color(pct, C)
             self._set_bar(self._fhbar, self._fh_fill, pct, col)
@@ -469,12 +491,14 @@ class Monitor(tk.Tk):
             self._fhcd.config(text=_countdown(lim.get("fh_resets_at", "")))
         if sd_pct is None:
             self._sd_misses += 1
-            if self._sd_misses == self.HIDE_AFTER:
-                self._sd_label.pack_forget(); self._sdbar.pack_forget()
-                self._sdpct.pack_forget(); self._sdcd.pack_forget(); self._sep3.pack_forget()
+            if self._sd_misses == self.HIDE_AFTER and self._sd_frame.winfo_manager():
+                self._sd_frame.pack_forget()
                 resized = True
         else:
             self._sd_misses = 0
+            if not self._sd_frame.winfo_manager():
+                self._sd_frame.pack(side="left")  # always last, nothing toggleable follows it
+                resized = True
             pct = int(sd_pct)
             col = _rl_color(pct, C)
             self._set_bar(self._sdbar, self._sd_fill, pct, col)
@@ -484,6 +508,20 @@ class Monitor(tk.Tk):
             self._resize_to_fit()
 
 
+def _make_dpi_aware():
+    # Must run before any Tk window is created, or Windows bitmap-stretches
+    # the whole rendered window to match display scaling — the classic
+    # blurry-text look on any HiDPI/scaled monitor.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()  # pre-8.1 fallback
+        except Exception:
+            pass
+
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        _make_dpi_aware()
     register_startup()
     Monitor().mainloop()
