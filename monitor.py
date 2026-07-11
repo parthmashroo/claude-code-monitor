@@ -6,23 +6,35 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
 
+# Curated to 10 themes across 5 real categories (2 each) instead of 12
+# variations on the same "dark + colorful accent" formula. Each theme also
+# carries a render STYLE (see THEME_STYLE below) that changes how the
+# surface itself is drawn, not just its colors.
 THEMES = {
+    # -- dark (glass-rendered) --
     "one-dark":        dict(BG="#282c34", SEP="#3e4451", FG="#abb2bf", DIM="#636d83", MUT="#4b5263", OK="#98c379", WARN="#e5c07b", HOT="#e06c75", A1="#56b6c2"),
-    "catppuccin-mocha":dict(BG="#1e1e2e", SEP="#313244", FG="#cdd6f4", DIM="#6c7086", MUT="#45475a", OK="#a6e3a1", WARN="#fab387", HOT="#f38ba8", A1="#94e2d5"),
-    "tokyo-night":     dict(BG="#1a1b26", SEP="#292e42", FG="#c0caf5", DIM="#565f89", MUT="#3b4261", OK="#9ece6a", WARN="#e0af68", HOT="#f7768e", A1="#73daca"),
-    "dracula":         dict(BG="#282a36", SEP="#44475a", FG="#f8f8f2", DIM="#6272a4", MUT="#44475a", OK="#50fa7b", WARN="#f1fa8c", HOT="#ff5555", A1="#8be9fd"),
     "nord":            dict(BG="#2e3440", SEP="#4c566a", FG="#d8dee9", DIM="#616e88", MUT="#4c566a", OK="#a3be8c", WARN="#ebcb8b", HOT="#bf616a", A1="#88c0d0"),
+    # -- solid / flat, no glass effects --
     "graphite":        dict(BG="#1c1e21", SEP="#3e4248", FG="#dadde1", DIM="#6b7178", MUT="#3e4248", OK="#78c8c0", WARN="#e8b260", HOT="#e87474", A1="#78c8c0"),
-    "mono":            dict(BG="#1a1a1a", SEP="#3a3a3a", FG="#e4e4e4", DIM="#808080", MUT="#464646", OK="#c8c8c8", WARN="#e0e0e0", HOT="#ffffff", A1="#b0b0b0"),
     "twilight":        dict(BG="#1a1625", SEP="#3d3550", FG="#e8e1f0", DIM="#7a6e8a", MUT="#554b69", OK="#a0d2b4", WARN="#e8a05a", HOT="#e4648c", A1="#96b4cc"),
+    # -- light / white --
     "linen":           dict(BG="#f5f0e8", SEP="#c0b49c", FG="#3c3732", DIM="#7a6e64", MUT="#b0a090", OK="#3d7a62", WARN="#a05a10", HOT="#a03030", A1="#2a6878"),
     "sakura":          dict(BG="#fdf0f3", SEP="#d8a0b0", FG="#4b3238", DIM="#9a6878", MUT="#c090a0", OK="#3a7850", WARN="#b06010", HOT="#c02848", A1="#2a6090"),
-    # from reference screenshots: soft pastel dashboard (lavender card UI)
+    # -- glassmorphism (dedicated: border stroke + accent stripe + sheen) --
     "lavender-mist":   dict(BG="#edeaf6", SEP="#d8d2ec", FG="#2d2a3d", DIM="#8b84a0", MUT="#c4bedc", OK="#3daa6e", WARN="#e08a3c", HOT="#e0526b", A1="#8b7fe8"),
-    # from reference screenshots: dark navy fintech glass card
     "midnight-fintech":dict(BG="#12141c", SEP="#232838", FG="#f4f6fb", DIM="#8890a6", MUT="#2a2f42", OK="#3ed598", WARN="#f0b860", HOT="#ff5c7a", A1="#4a7fff"),
+    # -- claymorphism (soft embossed dual-shadow, puffy pastel) --
+    "clay-peach":      dict(BG="#f2e4d8", SEP="#e0cab8", FG="#5c4433", DIM="#a68b73", MUT="#e8d5c4", OK="#6ba888", WARN="#e0a458", HOT="#d97a6c", A1="#e0916b"),
+    "clay-lavender":   dict(BG="#e6e1f5", SEP="#d0c7ec", FG="#3d3358", DIM="#8b7fb0", MUT="#d8d0f0", OK="#6bb894", WARN="#e0a458", HOT="#e0708a", A1="#9b8de0"),
 }
 THEME_NAMES = list(THEMES.keys())
+THEME_STYLE = {
+    "one-dark": "glass", "nord": "glass",
+    "graphite": "flat", "twilight": "flat",
+    "linen": "flat", "sakura": "flat",
+    "lavender-mist": "glass", "midnight-fintech": "glass",
+    "clay-peach": "clay", "clay-lavender": "clay",
+}
 CFG = Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "config.json"
 
 def load_cfg():
@@ -256,7 +268,7 @@ def _dwm_round_corners(hwnd):
     pref = ctypes.c_int(2)  # DWMWCP_ROUND — softer, more "liquid" than ROUNDSMALL on a slim bar
     return ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)) == 0
 
-def apply_glass(hwnd, bg_hex):
+def apply_glass(hwnd, bg_hex, blur=True):
     hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT — DWM APIs need the real top-level HWND, not Tk's inner child
     r, g, b = int(bg_hex[1:3], 16), int(bg_hex[3:5], 16), int(bg_hex[5:7], 16)
     dark = (0.299 * r + 0.587 * g + 0.114 * b) < 128
@@ -268,6 +280,8 @@ def apply_glass(hwnd, bg_hex):
     if is_win11:
         try: _dwm_round_corners(hwnd)
         except Exception: pass
+    if not blur:
+        return  # flat/clay themes: rounded corners only, no acrylic backdrop
     try:
         if is_win11 and _dwm_acrylic(hwnd, r, g, b, dark):
             return
@@ -314,10 +328,15 @@ class Monitor(tk.Tk):
     def __init__(self):
         super().__init__()
         cfg          = load_cfg()
+        # falls back to one-dark if the saved theme name no longer exists
+        # (e.g. a since-removed/renamed theme in an older config.json) --
+        # a curated theme list must never crash startup for an existing user.
         self._tname  = cfg.get("theme", "one-dark")
+        if self._tname not in THEMES:
+            self._tname = "one-dark"
         self.C       = THEMES[self._tname]
+        self._style  = THEME_STYLE.get(self._tname, "glass")
         self._grad   = theme_gradient_stops(self.C)
-        self._limits = {}
         self._dx = self._dy = 0
         self._stop = threading.Event()
         self._fh_misses = self._sd_misses = 0
@@ -337,12 +356,16 @@ class Monitor(tk.Tk):
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        # 0.95 was near-opaque -- with no live blur-behind (gated by the OS
-        # Transparency-effects setting, off on this machine, no per-app
-        # override exists), a real see-through window is the only honest way
-        # to make "what's behind it" actually visible instead of painting a
-        # gradient and calling it glass.
-        self.attributes("-alpha", 0.80)
+        # Tkinter's -alpha is whole-window: there is no way to make only the
+        # background translucent while keeping text opaque. Dropping it to
+        # 0.80 to chase "background visible" faded the text along with it —
+        # a real regression, not a taste call. Text legibility wins; back to
+        # near-opaque. Genuine background visibility needs real blur-behind
+        # (DwmSetWindowAttribute/SetWindowCompositionAttribute, already
+        # wired in apply_glass), which is gated by the OS Transparency-
+        # effects setting with no per-app override -- not something this
+        # attribute can substitute for.
+        self.attributes("-alpha", 0.97)
         self.configure(bg=self.C["BG"])
         x = cfg.get("x", 40); y = cfg.get("y", 40)
         x = max(0, min(x, self.winfo_screenwidth()  - self._cur_w))
@@ -361,7 +384,7 @@ class Monitor(tk.Tk):
 
         self.update_idletasks()
         if sys.platform == "win32":
-            apply_glass(self.winfo_id(), self.C["BG"])
+            apply_glass(self.winfo_id(), self.C["BG"], blur=(self._style == "glass"))
         self._start()
 
     # ── background: calm neutral surface + thin gradient accent + shadow edge ──
@@ -374,8 +397,16 @@ class Monitor(tk.Tk):
     def _redraw_background(self, w, h):
         cv = self.canvas
         cv.delete("bg")
-        cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
+        {"glass": self._bg_glass, "flat": self._bg_flat, "clay": self._bg_clay}[self._style](w, h)
+        cv.tag_lower("bg")
 
+    # dedicated glassmorphism: accent stripe + soft sheen + a visible border
+    # stroke outlining the whole card — every one of the supplied glass
+    # reference images has this stroke; it's the single strongest visual
+    # cue that reads as "glass edge" rather than "flat rectangle."
+    def _bg_glass(self, w, h):
+        cv = self.canvas
+        cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
         stops = self._grad
         n = len(stops) - 1
         step = 2
@@ -385,13 +416,33 @@ class Monitor(tk.Tk):
             seg = min(int(t * n), n - 1)
             color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
             cv.create_rectangle(xx, 0, xx + step, accent_h, fill=color, outline="", tags=("bg",))
-
-        hl = _mix("#ffffff", self.C["BG"], 0.62)  # soft light catch just under the accent stripe
+        hl = _mix("#ffffff", self.C["BG"], 0.62)
         cv.create_rectangle(0, accent_h, w, accent_h + 3, fill=hl, outline="", tags=("bg",))
-
         shadow = _mix("#000000", self.C["BG"], 0.7)
         cv.create_line(0, h - 1, w, h - 1, fill=shadow, tags=("bg",))
-        cv.tag_lower("bg")
+        border = _mix("#ffffff", self.C["BG"], 0.45)
+        cv.create_rectangle(0, 0, w - 1, h - 1, outline=border, fill="", tags=("bg",))
+
+    # plain flat / solid surface: no gradient, no stripe, no border — for
+    # themes explicitly meant to have zero glass effect.
+    def _bg_flat(self, w, h):
+        cv = self.canvas
+        cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
+        shadow = _mix("#000000", self.C["BG"], 0.85)
+        cv.create_line(0, h - 1, w, h - 1, fill=shadow, tags=("bg",))
+
+    # claymorphism: soft embossed dual-shadow (light catch on the top-left
+    # edge, soft shadow on the bottom-right) on a matte pastel surface —
+    # simulates a puffy pressed/extruded surface instead of glass or flat.
+    def _bg_clay(self, w, h):
+        cv = self.canvas
+        cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
+        light = _mix("#ffffff", self.C["BG"], 0.45)
+        dark  = _mix("#000000", self.C["BG"], 0.80)
+        cv.create_line(1, 1, w - 1, 1, fill=light, width=2, tags=("bg",))
+        cv.create_line(1, 1, 1, h - 1, fill=light, width=2, tags=("bg",))
+        cv.create_line(1, h - 2, w - 1, h - 2, fill=dark, width=2, tags=("bg",))
+        cv.create_line(w - 2, 1, w - 2, h - 1, fill=dark, width=2, tags=("bg",))
 
     def _build_close(self):
         C, cv = self.C, self.canvas
@@ -535,7 +586,6 @@ class Monitor(tk.Tk):
                 try:
                     lim = fetch_limits()
                     if lim and not self._stop.is_set():
-                        self._limits = lim
                         self.after(0, self._apply_limits, lim)
                 except Exception: pass
                 self._stop.wait(60)
@@ -544,6 +594,13 @@ class Monitor(tk.Tk):
         threading.Thread(target=run_api,   daemon=True).start()
 
     def _apply_local(self, t, st, msgs):
+        # Only redraws from cached state -- must NOT re-run rate-limit miss
+        # counting here. This fires every 5s; _apply_limits' miss counter is
+        # meant to track real 60s API polls. Re-processing the same cached
+        # self._limits on every 5s tick was incrementing misses 12x faster
+        # than intended, hiding a segment in ~15s instead of the real 3min
+        # HIDE_AFTER window -- that was the actual cause of the reported
+        # rapid show/hide flicker, not a cosmetic issue.
         C, d = self.C, self._d
         cost_c = C["HOT"] if t["cost"] > 10 else C["WARN"] if t["cost"] > 3 else C["OK"]
         prefix = "" if t.get("confident", True) else "~"
@@ -551,11 +608,9 @@ class Monitor(tk.Tk):
         d["cost"] = prefix + _fc(t["cost"]); d["cost_col"] = cost_c
         d["sess"] = _k(st) if st else "--"
         d["msgs"] = f"{msgs}msg" if msgs else ""
-        if self._limits:
-            self._apply_limits(self._limits, relayout=False)
         self._layout()
 
-    def _apply_limits(self, lim, relayout=True):
+    def _apply_limits(self, lim):
         # Once a segment has shown real data, a later transient miss (a
         # single dropped fetch, a rate-limited API call) freezes it on its
         # last-known values instead of hiding it — hiding/showing on every
@@ -589,8 +644,7 @@ class Monitor(tk.Tk):
             col = _rl_color(pct, C)
             d["sd_pct_txt"] = f"{pct}%"; d["sd_col"] = col
             d["sd_cd"] = _countdown(lim.get("sd_resets_at", ""))
-        if relayout:
-            self._layout()
+        self._layout()
 
 
 def _make_dpi_aware():
