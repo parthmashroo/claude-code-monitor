@@ -109,12 +109,14 @@ def load_today():
                     except: pass
         except: pass
 
-    total = sum(b[0] + b[1] for b in buckets.values())
+    inp = sum(b[0] for b in buckets.values())
+    out = sum(b[1] for b in buckets.values())
+    total = inp + out
     cost = 0.0; confident = True
     for m, b in buckets.items():
         c, ok = _cost(*b, model=m)
         cost += c; confident = confident and ok
-    return dict(total=total, cost=cost, confident=confident)
+    return dict(total=total, cost=cost, confident=confident, inp=inp, out=out)
 
 def load_sess():
     try:
@@ -233,10 +235,13 @@ class Monitor(tk.Tk):
         drag.bind("<ButtonPress-1>", self._press)
         drag.bind("<B1-Motion>",     self._drag)
 
-        # today tokens
+        # today tokens (input / output split)
         self._lbl(row, "tdy", "DIM", ("Consolas", 8)).pack(side="left")
-        self._tok  = self._lbl(row, "--",  "A1",   ("Consolas", 9, "bold"))
-        self._tok.pack(side="left", padx=(3, 0))
+        self._tok_in  = self._lbl(row, "--", "A1", ("Consolas", 9, "bold"))
+        self._tok_in.pack(side="left", padx=(3, 0))
+        self._lbl(row, "/", "MUT", ("Consolas", 9)).pack(side="left")
+        self._tok_out = self._lbl(row, "--", "A1", ("Consolas", 9, "bold"))
+        self._tok_out.pack(side="left")
         self._cost = self._lbl(row, "",    "WARN",  ("Consolas", 9))
         self._cost.pack(side="left", padx=(4, 0))
 
@@ -275,7 +280,7 @@ class Monitor(tk.Tk):
         self._sdcd.pack(side="left", padx=(3, 0))
 
         # make full row draggable + right-click for theme
-        for w in [row, self._tok, self._cost, self._sess, self._msgs,
+        for w in [row, self._tok_in, self._tok_out, self._cost, self._sess, self._msgs,
                   self._fhbar, self._fhpct, self._fhcd,
                   self._sdbar, self._sdpct, self._sdcd,
                   self._sep1, self._sep2, self._sep3]:
@@ -342,7 +347,8 @@ class Monitor(tk.Tk):
         C = self.C
         cost_c = C["HOT"] if t["cost"] > 10 else C["WARN"] if t["cost"] > 3 else C["OK"]
         prefix = "" if t.get("confident", True) else "~"
-        self._tok.config(text=_k(t["total"]))
+        self._tok_in.config(text=_k(t["inp"]))
+        self._tok_out.config(text=_k(t["out"]))
         self._cost.config(text=prefix + _fc(t["cost"]), fg=cost_c)
         self._sess.config(text=_k(st) if st else "--")
         self._msgs.config(text=f"{msgs}msg" if msgs else "")
