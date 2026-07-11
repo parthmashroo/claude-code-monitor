@@ -17,6 +17,10 @@ THEMES = {
     "twilight":        dict(BG="#1a1625", SEP="#3d3550", FG="#e8e1f0", DIM="#7a6e8a", MUT="#554b69", OK="#a0d2b4", WARN="#e8a05a", HOT="#e4648c", A1="#96b4cc"),
     "linen":           dict(BG="#f5f0e8", SEP="#c0b49c", FG="#3c3732", DIM="#7a6e64", MUT="#b0a090", OK="#3d7a62", WARN="#a05a10", HOT="#a03030", A1="#2a6878"),
     "sakura":          dict(BG="#fdf0f3", SEP="#d8a0b0", FG="#4b3238", DIM="#9a6878", MUT="#c090a0", OK="#3a7850", WARN="#b06010", HOT="#c02848", A1="#2a6090"),
+    # from reference screenshots: soft pastel dashboard (lavender card UI)
+    "lavender-mist":   dict(BG="#edeaf6", SEP="#d8d2ec", FG="#2d2a3d", DIM="#8b84a0", MUT="#c4bedc", OK="#3daa6e", WARN="#e08a3c", HOT="#e0526b", A1="#8b7fe8"),
+    # from reference screenshots: dark navy fintech glass card
+    "midnight-fintech":dict(BG="#12141c", SEP="#232838", FG="#f4f6fb", DIM="#8890a6", MUT="#2a2f42", OK="#3ed598", WARN="#f0b860", HOT="#ff5c7a", A1="#4a7fff"),
 }
 THEME_NAMES = list(THEMES.keys())
 CFG = Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "config.json"
@@ -302,10 +306,10 @@ def register_startup():
 # with text drawn on top of it.
 
 class Monitor(tk.Tk):
-    H = 30
+    H = 34
     HIDE_AFTER = 3  # consecutive misses before hiding a rate-limit segment
-    BAR_W = 52; BAR_H = 10
-    PAD_L = 10; PAD_R = 22
+    BAR_W = 58; BAR_H = 12
+    PAD_L = 12; PAD_R = 24
 
     def __init__(self):
         super().__init__()
@@ -408,7 +412,7 @@ class Monitor(tk.Tk):
         C, cv, d = self.C, self.canvas, self._d
         cv.delete("content")
         mid = self.H // 2
-        FL, FV, FVS, FS = ("Segoe UI", 8), ("Segoe UI Semibold", 10), ("Segoe UI Semibold", 9), ("Segoe UI", 9)
+        FL, FV, FVS, FS = ("Segoe UI", 9), ("Segoe UI Semibold", 11), ("Segoe UI Semibold", 10), ("Segoe UI", 10)
         x = self.PAD_L
 
         def put(text, color, font=FV, before=0, after=4):
