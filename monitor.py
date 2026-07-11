@@ -401,6 +401,33 @@ class Monitor(tk.Tk):
         x = cfg.get("x", 40); y = cfg.get("y", 40)
         x = max(0, min(x, self.winfo_screenwidth()  - self._cur_w))
         y = max(0, min(y, self.winfo_screenheight() - self.H))
+
+        # DPI-aware sizing: every pixel constant (H, padding, bar size) was a
+        # fixed number, so the same window was physically smaller on a
+        # high-DPI laptop panel (e.g. 150% scaling) and larger on a 100%
+        # external monitor -- Windows never rescales an overrideredirect
+        # Tk window for you. Placeholder-position first so the window lands
+        # on its real target monitor, then read that monitor's actual DPI
+        # and scale from there, before building anything pixel-sized.
+        self.geometry(f"1x1+{x}+{y}")
+        self.update_idletasks()
+        scale = 1.0
+        if sys.platform == "win32":
+            try:
+                hwnd = ctypes.windll.user32.GetAncestor(self.winfo_id(), 2)  # GA_ROOT
+                dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+                scale = dpi / 96.0
+                self.tk.call("tk", "scaling", dpi / 72.0)  # sync Tk's own point->pixel conversion
+            except Exception:
+                scale = 1.0
+        self._scale = scale
+        self.H      = round(34 * scale)
+        self.PAD_L  = round(12 * scale)
+        self.PAD_R  = round(24 * scale)
+        self.BAR_W  = round(58 * scale)
+        self.BAR_H  = round(12 * scale)
+        self._cur_w = round(self._cur_w * scale)
+        y = max(0, min(y, self.winfo_screenheight() - self.H))
         self.geometry(f"{self._cur_w}x{self.H}+{x}+{y}")
 
         self.canvas = tk.Canvas(self, width=self._cur_w, height=self.H,
@@ -598,7 +625,10 @@ class Monitor(tk.Tk):
             # itself), matching the gradient-pill look in every supplied
             # reference instead of a flat solid fill.
             light = _mix(color, "#ffffff", 0.35)
-            step = 2
+            # 1px steps here (vs. 2px on the wider background gradients) --
+            # the bar is at most ~58px, so 2px steps produce visible banding
+            # at this scale where a wider gradient could get away with it.
+            step = 1
             for xx in range(0, fw, step):
                 t = xx / max(fw - 1, 1)
                 gcol = _mix(color, light, t)
