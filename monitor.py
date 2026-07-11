@@ -29,8 +29,8 @@ THEMES = {
     "clay-peach":      dict(BG="#f2e4d8", SEP="#e0cab8", FG="#5c4433", DIM="#a68b73", MUT="#e8d5c4", OK="#6ba888", WARN="#e0a458", HOT="#d97a6c", A1="#e0916b"),
     "clay-lavender":   dict(BG="#e6e1f5", SEP="#d0c7ec", FG="#3d3358", DIM="#8b7fb0", MUT="#d8d0f0", OK="#6bb894", WARN="#e0a458", HOT="#e0708a", A1="#9b8de0"),
     # -- gradient: bold saturated surface, clean 3-stop sweeps (see THEME_GRAD) --
-    "spectrum":        dict(BG="#15121e", SEP="#3a3350", FG="#ffffff", DIM="#c9c2e0", MUT="#4a4266", OK="#4ee08a", WARN="#ffc857", HOT="#ff5d7a", A1="#3987e5"),
-    "sunrise":         dict(BG="#1a1020", SEP="#3d2a45", FG="#ffffff", DIM="#dcc3d8", MUT="#4a3350", OK="#4ee0a0", WARN="#ffb340", HOT="#ff5c9e", A1="#d95926"),
+    "spectrum":        dict(BG="#0d0d0d", SEP="#242728", FG="#f4f4f6", DIM="#9c9c9d", MUT="#18191a", OK="#59d499", WARN="#ffc533", HOT="#ff6161", A1="#3987e5"),
+    "sunrise":         dict(BG="#0d0d0d", SEP="#242728", FG="#f4f4f6", DIM="#9c9c9d", MUT="#18191a", OK="#59d499", WARN="#ffc533", HOT="#ff6161", A1="#d95926"),
 }
 THEME_NAMES = list(THEMES.keys())
 THEME_STYLE = {
@@ -465,26 +465,30 @@ class Monitor(tk.Tk):
         cv.create_line(2, h - 3, w - 2, h - 3, fill=dark, width=4, tags=("bg",))
         cv.create_line(w - 3, 2, w - 3, h - 2, fill=dark, width=4, tags=("bg",))
 
-    # gradient: the loud, unapologetic option — a bold full-surface sweep
-    # across a *curated 3-stop* gradient (THEME_GRAD), not a 4-hue full-
-    # spectrum cycle. A wider hue cycle looks muddy/busy at this width
-    # regardless of interpolation method; the supplied gradient references
-    # all use clean 2-3 stop transitions. No stipple/dither highlight —
-    # that was a real bug (the 1990s dithered-highlight technique I'd
-    # already removed once, reintroduced by copy-paste) that read as a
-    # dead, muddy band across the top of the bar.
+    # gradient: previously painted the curated 3-stop sweep across the
+    # entire surface -- still looked bad no matter how the colors were
+    # picked, because that mechanism itself is wrong. Studied Raycast's
+    # actual documented design system for the answer: their signature
+    # color moment is a gradient stripe used ONCE, on an otherwise calm
+    # near-black canvas -- "saturated accent colors only inside
+    # illustrations, never on chrome" and "no drop shadows, elevation
+    # comes from a flat surface ladder." Rebuilt on that model: a restrained
+    # near-black canvas + hairline border (matching the rest of the app),
+    # with the curated gradient now confined to a single thin signature
+    # stripe instead of covering the whole bar.
     def _bg_rainbow(self, w, h):
         cv = self.canvas
+        cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
         stops = THEME_GRAD[self._tname]
         n = len(stops) - 1
+        stripe_h = 2
         step = 2
         for xx in range(0, w, step):
             t = xx / max(w - 1, 1)
             seg = min(int(t * n), n - 1)
             color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
-            cv.create_rectangle(xx, 0, xx + step, h, fill=color, outline="", tags=("bg",))
-        border = _mix("#ffffff", self.C["BG"], 0.15)
-        cv.create_rectangle(0, 0, w - 1, h - 1, outline=border, fill="", tags=("bg",))
+            cv.create_rectangle(xx, 0, xx + step, stripe_h, fill=color, outline="", tags=("bg",))
+        cv.create_rectangle(0, 0, w - 1, h - 1, outline=self.C["SEP"], fill="", tags=("bg",))
 
     def _build_close(self):
         C, cv = self.C, self.canvas
