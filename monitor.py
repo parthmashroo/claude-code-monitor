@@ -171,6 +171,51 @@ def round_corners(hwnd, w, h, radius=14):
     region = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w, h, radius, radius)
     ctypes.windll.user32.SetWindowRgn(hwnd, region, True)
 
+# ── glassmorphism ─────────────────────────────────────────────────────────────
+# Tier 1: DWM Acrylic backdrop (Win11 22000+) — native, flyout-style blur.
+# Tier 2: SetWindowCompositionAttribute acrylic blur-behind (Win10 1803+, undocumented
+#         but stable and widely relied upon — no official replacement exists pre-Win11).
+# Tier 3: flat alpha transparency (already the default, no action needed).
+GLASS_ALPHA = 0xCC  # tint opacity 0-255; lower = more blur showing through
+
+class _ACCENT_POLICY(ctypes.Structure):
+    _fields_ = [("AccentState", ctypes.c_int), ("AccentFlags", ctypes.c_int),
+                ("GradientColor", ctypes.c_uint), ("AnimationId", ctypes.c_int)]
+
+class _WINCOMPATTRDATA(ctypes.Structure):
+    _fields_ = [("Attribute", ctypes.c_int), ("Data", ctypes.c_void_p), ("SizeOfData", ctypes.c_size_t)]
+
+def _dwm_acrylic(hwnd, r, g, b, dark):
+    dwm = ctypes.windll.dwmapi
+    flag = ctypes.c_int(1 if dark else 0)
+    dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(flag), ctypes.sizeof(flag))  # immersive dark mode
+    backdrop = ctypes.c_int(3)  # DWMSBT_TRANSIENTWINDOW — flyout/acrylic, fits a floating toolbar
+    return dwm.DwmSetWindowAttribute(hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)) == 0
+
+def _legacy_acrylic(hwnd, r, g, b):
+    accent = _ACCENT_POLICY()
+    accent.AccentState   = 4  # ACCENT_ENABLE_ACRYLICBLURBEHIND
+    accent.GradientColor = (GLASS_ALPHA << 24) | (b << 16) | (g << 8) | r  # ABGR
+    data = _WINCOMPATTRDATA()
+    data.Attribute   = 19  # WCA_ACCENT_POLICY
+    data.SizeOfData  = ctypes.sizeof(accent)
+    data.Data        = ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p)
+    return bool(ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
+
+def apply_glass(hwnd, bg_hex):
+    hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT — DWM APIs need the real top-level HWND, not Tk's inner child
+    r, g, b = int(bg_hex[1:3], 16), int(bg_hex[3:5], 16), int(bg_hex[5:7], 16)
+    dark = (0.299 * r + 0.587 * g + 0.114 * b) < 128
+    try:
+        if sys.getwindowsversion().build >= 22000 and _dwm_acrylic(hwnd, r, g, b, dark):
+            return
+    except Exception:
+        pass
+    try:
+        _legacy_acrylic(hwnd, r, g, b)
+    except Exception:
+        pass  # Tier 3: falls back to the existing flat -alpha transparency
+
 # ── startup registration ──────────────────────────────────────────────────────
 
 def register_startup():
@@ -218,6 +263,7 @@ class Monitor(tk.Tk):
         self.update_idletasks()
         if sys.platform == "win32":
             round_corners(self.winfo_id(), self.W, self.H)
+            apply_glass(self.winfo_id(), self.C["BG"])
         self._start()
 
     # ── build ─────────────────────────────────────────────────────────────────
