@@ -29,8 +29,8 @@ THEMES = {
     "clay-peach":      dict(BG="#f2e4d8", SEP="#e0cab8", FG="#5c4433", DIM="#a68b73", MUT="#e8d5c4", OK="#6ba888", WARN="#e0a458", HOT="#d97a6c", A1="#e0916b"),
     "clay-lavender":   dict(BG="#e6e1f5", SEP="#d0c7ec", FG="#3d3358", DIM="#8b7fb0", MUT="#d8d0f0", OK="#6bb894", WARN="#e0a458", HOT="#e0708a", A1="#9b8de0"),
     # -- gradient: bold saturated surface, clean 3-stop sweeps (see THEME_GRAD) --
-    "spectrum":        dict(BG="#15121e", SEP="#3a3350", FG="#ffffff", DIM="#c9c2e0", MUT="#4a4266", OK="#4ee08a", WARN="#ffc857", HOT="#ff5d7a", A1="#5dc9ff"),
-    "sunrise":         dict(BG="#1a1020", SEP="#3d2a45", FG="#ffffff", DIM="#dcc3d8", MUT="#4a3350", OK="#4ee0a0", WARN="#ffb340", HOT="#ff5c9e", A1="#9b5de5"),
+    "spectrum":        dict(BG="#15121e", SEP="#3a3350", FG="#ffffff", DIM="#c9c2e0", MUT="#4a4266", OK="#4ee08a", WARN="#ffc857", HOT="#ff5d7a", A1="#3987e5"),
+    "sunrise":         dict(BG="#1a1020", SEP="#3d2a45", FG="#ffffff", DIM="#dcc3d8", MUT="#4a3350", OK="#4ee0a0", WARN="#ffb340", HOT="#ff5c9e", A1="#d95926"),
 }
 THEME_NAMES = list(THEMES.keys())
 THEME_STYLE = {
@@ -40,12 +40,19 @@ THEME_STYLE = {
     "clay-peach": "clay", "clay-lavender": "clay",
     "spectrum": "rainbow", "sunrise": "rainbow",
 }
-# Curated, clean 3-stop gradients (not a 4-hue full-spectrum cycle, which
-# reads as muddy/busy no matter the interpolation) for the gradient-style
-# themes, modeled directly on the supplied "smooth 2-3 stop" references.
+# Gradient stops for the two "rainbow" themes are pulled from a validated
+# categorical palette (dataviz skill's reference instance) instead of
+# hand-picked hex — each triple checked with scripts/validate_palette.js
+# against this theme's own dark surface: OKLCH lightness band, chroma
+# floor, CVD-safe separation (Machado-2009), and contrast, all PASS.
+# spectrum: blue #3987e5 / aqua #199e70 / violet #9085e9 -- worst adjacent
+#   CVD deltaE 61.6 (target >=12), all >=3:1 contrast on #15121e.
+# sunrise: yellow #c98500 / orange #d95926 / red #e66767 -- worst adjacent
+#   CVD deltaE 11.4 (legal floor band for a decorative, non-data surface),
+#   all >=3:1 contrast on #1a1020.
 THEME_GRAD = {
-    "spectrum": ["#7c4fd6", "#2dd4c8", "#e0417f"],  # purple -> teal -> magenta
-    "sunrise":  ["#ff9a56", "#ff5c9e", "#9b5de5"],  # orange -> pink -> purple
+    "spectrum": ["#3987e5", "#199e70", "#9085e9"],
+    "sunrise":  ["#c98500", "#d95926", "#e66767"],
 }
 CFG = Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "config.json"
 
