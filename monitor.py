@@ -478,26 +478,28 @@ class Monitor(tk.Tk):
         cv.create_line(2, h - 3, w - 2, h - 3, fill=dark, width=4, tags=("bg",))
         cv.create_line(w - 3, 2, w - 3, h - 2, fill=dark, width=4, tags=("bg",))
 
-    # gradient: the 2px stripe (previous pass) took the Raycast lesson too
-    # far — a near-black bar with a hairline of color reads as "the gradient
-    # theme killed its own gradient," not restrained. Raycast's own hero
-    # stripe is a real, visible presence (not 2px) — restraint was about
-    # frequency (once per page), not about making the one moment invisible.
-    # Also softened toward pastel (mix ~22% white) to match the soft, airy
-    # gradient reference supplied — the earlier version was full-saturation,
-    # which reads as harsher than the intended "beautiful gradient" look.
+    # gradient: covering the text row in gradient (previous pass, 66% height)
+    # was a structural contrast failure, not a tuning issue -- measured with
+    # the validator's own contrast() function: white text against that
+    # pastel gradient hit ~1.7-1.9:1 (need >=4.5:1). A pastel/mid-lightness
+    # background is bad for ANY text color sitting on it — no recolor fixes
+    # that, because the problem is the background's own lightness, not the
+    # text. Structural fix: the gradient never sits behind text. It frames
+    # the bar as a thin band top AND bottom; the text row in between sits on
+    # the plain, calm, full-contrast surface — same guarantee as "flat".
     def _bg_rainbow(self, w, h):
         cv = self.canvas
         cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
-        stops = [_mix(s, "#ffffff", 0.22) for s in THEME_GRAD[self._tname]]
+        stops = THEME_GRAD[self._tname]
         n = len(stops) - 1
-        stripe_h = round(h * 0.66)
+        band_h = max(4, round(h * 0.16))
         step = 2
         for xx in range(0, w, step):
             t = xx / max(w - 1, 1)
             seg = min(int(t * n), n - 1)
             color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
-            cv.create_rectangle(xx, 0, xx + step, stripe_h, fill=color, outline="", tags=("bg",))
+            cv.create_rectangle(xx, 0, xx + step, band_h, fill=color, outline="", tags=("bg",))
+            cv.create_rectangle(xx, h - band_h, xx + step, h, fill=color, outline="", tags=("bg",))
         cv.create_rectangle(0, 0, w - 1, h - 1, outline=self.C["SEP"], fill="", tags=("bg",))
 
     def _build_close(self):
@@ -524,14 +526,12 @@ class Monitor(tk.Tk):
         x = self.PAD_L
 
         def put(text, color, font=FV, before=0, after=4):
+            # No style needs a text-shadow trick anymore: the gradient
+            # frames the bar top/bottom now (see _bg_rainbow) and never
+            # sits behind the text row, so every style gets the same plain-
+            # surface contrast guarantee.
             nonlocal x
             x += before
-            if self._style == "rainbow":
-                # only the rainbow theme sits text on a busy, saturated
-                # surface -- a dark shadow copy keeps it legible without
-                # imposing that cost on the calm flat/glass/clay themes.
-                shadow = _mix(color, "#000000", 0.8)
-                cv.create_text(x + 1, mid + 1, text=text, fill=shadow, font=font, anchor="w", tags=("content",))
             item = cv.create_text(x, mid, text=text, fill=color, font=font, anchor="w", tags=("content",))
             bbox = cv.bbox(item)
             x += (bbox[2] - bbox[0] if bbox else 0) + after
