@@ -5,6 +5,7 @@ import colorsys, ctypes, json, subprocess, sys, threading, time, urllib.error, u
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
+from PIL import Image, ImageDraw, ImageTk
 
 # 10 themes, 5 categories x 2 (dark, light, glassmorphism, claymorphism,
 # gradient). Each theme carries a render STYLE (THEME_STYLE below) that
@@ -116,6 +117,10 @@ def _rl_color(pct, C):
 
 def _hex_rgb(h):
     return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+
+def _hex_rgba(h, a=255):
+    r, g, b = _hex_rgb(h)
+    return (r, g, b, a)
 
 def _mix(hex_a, hex_b, t):
     """Plain RGB lerp, t=0 -> hex_a, t=1 -> hex_b. Fine for blends toward a
@@ -582,14 +587,14 @@ class Monitor(tk.Tk):
         if self._fh_visible:
             sep()
             put("5h", C["DIM"], FL, after=6)
-            x = self._place_bar(x, mid, d["fh_pct_txt"], d["fh_col"])
+            x = self._place_bar(x, mid, d["fh_pct_txt"], d["fh_col"], "fh")
             put(d["fh_pct_txt"], d["fh_col"], FVS, after=4)
             put(d["fh_cd"], C["DIM"], FL, after=0)
 
         if self._sd_visible:
             sep()
             put("7d", C["DIM"], FL, after=6)
-            x = self._place_bar(x, mid, d["sd_pct_txt"], d["sd_col"])
+            x = self._place_bar(x, mid, d["sd_pct_txt"], d["sd_col"], "sd")
             put(d["sd_pct_txt"], d["sd_col"], FVS, after=4)
             put(d["sd_cd"], C["DIM"], FL, after=0)
 
@@ -603,39 +608,50 @@ class Monitor(tk.Tk):
         cv.tag_raise("content")
         cv.tag_raise("close")
 
-    def _place_bar(self, x, mid, pct_txt, color):
-        cv, C = self.canvas, self.C
-        bw, bh = self.BAR_W, self.BAR_H
-        r = bh / 2
-        y0, y1 = mid - r, mid + r
+    # Tkinter's Canvas has no anti-aliasing -- every oval/rounded edge drawn
+    # with create_oval/create_rectangle comes out stair-stepped ("Windows
+    # XP pixelated"), no matter how carefully the geometry is tuned. Real
+    # smooth edges need supersampling: render the pill at 4x resolution
+    # with PIL (which itself doesn't anti-alias primitives either), then
+    # downsample with LANCZOS, which is what actually produces the smooth
+    # curve -- the same technique browsers' compositors do automatically.
+    BAR_SS = 4
+
+    def _render_bar_image(self, bw, bh, pct, color):
+        C = self.C
+        SS = self.BAR_SS
+        W, H = bw * SS, bh * SS
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
         track_col  = _mix(C["MUT"], C["BG"], 0.2)
-        border_col = _mix(C["FG"], C["BG"], 0.6)  # subtle stroke, not a hard bright outline
-        # pill-shaped track: rounded caps + straight body
-        cv.create_oval(x, y0, x + bh, y1, fill=track_col, outline=border_col, tags=("content",))
-        cv.create_oval(x + bw - bh, y0, x + bw, y1, fill=track_col, outline=border_col, tags=("content",))
-        cv.create_rectangle(x + r, y0, x + bw - r, y1, fill=track_col, outline="", tags=("content",))
-        cv.create_line(x + r, y0, x + bw - r, y0, fill=border_col, tags=("content",))
-        cv.create_line(x + r, y1, x + bw - r, y1, fill=border_col, tags=("content",))
-        pct = int(pct_txt.rstrip("%")) if pct_txt else 0
+        border_col = _mix(C["FG"], C["BG"], 0.6)
+        draw.rounded_rectangle([0, 0, W - 1, H - 1], radius=H // 2,
+                               fill=_hex_rgba(track_col), outline=_hex_rgba(border_col), width=SS)
         if pct > 0:
             fw = max(bh, round(min(pct, 100) / 100 * bw))
-            fy0, fy1 = y0 + 1.5, y1 - 1.5
-            fr = (fy1 - fy0) / 2
-            # soft two-tone gradient fill (status color -> a lighter tint of
-            # itself), matching the gradient-pill look in every supplied
-            # reference instead of a flat solid fill.
+            FW = fw * SS
             light = _mix(color, "#ffffff", 0.35)
-            # 1px steps here (vs. 2px on the wider background gradients) --
-            # the bar is at most ~58px, so 2px steps produce visible banding
-            # at this scale where a wider gradient could get away with it.
-            step = 1
-            for xx in range(0, fw, step):
-                t = xx / max(fw - 1, 1)
-                gcol = _mix(color, light, t)
-                cv.create_rectangle(x + 1.5 + xx, fy0, x + 1.5 + xx + step, fy1, fill=gcol, outline="", tags=("content",))
-            cv.create_oval(x + 1.5, fy0, x + 1.5 + 2 * fr, fy1, fill=color, outline="", tags=("content",))
-            if fw > bh:
-                cv.create_oval(x + fw - 1.5 - 2 * fr, fy0, x + fw - 1.5, fy1, fill=light, outline="", tags=("content",))
+            fill_img = Image.new("RGBA", (FW, H), (0, 0, 0, 0))
+            fdraw = ImageDraw.Draw(fill_img)
+            for xx in range(FW):
+                t = xx / max(FW - 1, 1)
+                fdraw.line([(xx, 0), (xx, H)], fill=_hex_rgba(_mix(color, light, t)))
+            inset = round(1.5 * SS)
+            mask = Image.new("L", (FW, H), 0)
+            ImageDraw.Draw(mask).rounded_rectangle(
+                [inset, inset, FW - 1 - inset, H - 1 - inset],
+                radius=max(1, (H - 2 * inset) // 2), fill=255)
+            fill_img.putalpha(mask)
+            img.alpha_composite(fill_img, (0, 0))
+        return ImageTk.PhotoImage(img.resize((bw, bh), Image.LANCZOS))
+
+    def _place_bar(self, x, mid, pct_txt, color, which):
+        cv = self.canvas
+        bw, bh = self.BAR_W, self.BAR_H
+        pct = int(pct_txt.rstrip("%")) if pct_txt else 0
+        photo = self._render_bar_image(bw, bh, pct, color)
+        setattr(self, f"_{which}_bar_photo", photo)  # Tkinter drops the image if nothing keeps a reference
+        cv.create_image(x, mid, image=photo, anchor="w", tags=("content",))
         return x + bw + 6
 
     # ── theme ─────────────────────────────────────────────────────────────────

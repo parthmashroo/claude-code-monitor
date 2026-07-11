@@ -10,12 +10,12 @@
 [![Stars](https://img.shields.io/github/stars/parthmashroo/claude-code-monitor?style=social)](https://github.com/parthmashroo/claude-code-monitor/stargazers)
 [![Last Commit](https://img.shields.io/github/last-commit/parthmashroo/claude-code-monitor)](https://github.com/parthmashroo/claude-code-monitor/commits/master)
 [![Issues](https://img.shields.io/github/issues/parthmashroo/claude-code-monitor)](https://github.com/parthmashroo/claude-code-monitor/issues)
-[![Zero deps](https://img.shields.io/badge/dependencies-zero-brightgreen)](https://github.com/parthmashroo/claude-code-monitor)
+[![Dependencies](https://img.shields.io/badge/dependencies-Pillow-brightgreen)](https://github.com/parthmashroo/claude-code-monitor)
 [![Works in VS Code](https://img.shields.io/badge/works%20in-VS%20Code%20chat-007ACC?logo=visualstudiocode&logoColor=white)](https://github.com/parthmashroo/claude-code-monitor)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-compatible-D97706?logo=anthropic&logoColor=white)](https://github.com/parthmashroo/claude-code-monitor)
 [![Real API](https://img.shields.io/badge/rate%20limits-real%20API%20data%2C%20not%20estimates-8B5CF6)](https://github.com/parthmashroo/claude-code-monitor)
 
-**real rate limits · VS Code chat mode · 10 themes · zero deps · auto-startup · Python stdlib only**
+**real rate limits · VS Code chat mode · 10 themes · anti-aliased UI · auto-startup**
 
 ![Widget on Desktop](screenshots/widget-on-desktop.png)
 
@@ -25,7 +25,7 @@
 
 ## What it is
 
-A single 30px-tall floating window that stays on top of everything — your code, your browser, your VS Code — and shows live Claude Code usage at a glance.
+A single ~34px-tall (DPI-scaled to your monitor) floating window that stays on top of everything — your code, your browser, your VS Code — and shows live Claude Code usage at a glance.
 
 ```
 561k $8.78  |  sess 331k 384msg  |  5h ██████░ 93% 1h44m  |  7d █░░░░░ 25%   ×
@@ -50,7 +50,7 @@ This widget reads the same usage data Claude Code already has on your machine an
 
 - Reads only files Claude Code already owns on your machine
 - No analytics, no telemetry, no third-party servers
-- Fully open source — every line is in `monitor.py` (~200 lines, single file)
+- Fully open source — every line is in `monitor.py` (single file)
 - Token never shared, logged, or transmitted anywhere except back to Anthropic to fetch your own data
 
 ---
@@ -62,9 +62,9 @@ This widget reads the same usage data Claude Code already has on your machine an
 - **Session stats** — token count and message count for the active session (via Stop hook)
 - **Color-coded bars** — green < 50%, yellow 50–80%, red > 80%
 - **10 themes** — right-click anywhere to switch, position preserved
-- **Always on top** — 30px tall, floats above everything including VS Code
+- **Always on top** — ~34px tall (DPI-scaled), floats above everything including VS Code
 - **Auto-starts at login** — Windows, macOS, Linux
-- **Zero dependencies** — pure Python stdlib + tkinter, nothing to install
+- **One dependency** — Pillow, used to render smooth anti-aliased progress bars (raw Tkinter Canvas can't draw curves without visible jagged edges)
 
 ---
 
@@ -73,14 +73,15 @@ This widget reads the same usage data Claude Code already has on your machine an
 ```bash
 git clone https://github.com/parthmashroo/claude-code-monitor
 cd claude-code-monitor
+pip install pillow
 python monitor.py
 ```
 
 Done. The widget appears and registers itself to auto-start at login.
 
-> **Requirement:** Python 3.8+ with tkinter.
+> **Requirement:** Python 3.8+ with tkinter, plus Pillow (`pip install pillow`).
 > On Linux: `sudo apt install python3-tk`
-> On macOS/Windows: already included with Python.
+> On macOS/Windows: tkinter is already included with Python.
 
 ---
 
