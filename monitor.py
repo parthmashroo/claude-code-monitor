@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code monitor — single-row floating widget."""
 
-import json, subprocess, sys, threading, time, urllib.request, winreg
+import json, subprocess, sys, threading, time, urllib.error, urllib.request, winreg
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
@@ -122,23 +122,39 @@ def fetch_limits():
         creds = json.loads(
             (Path.home() / ".claude" / ".credentials.json").read_text(encoding="utf-8")
         )
+    except FileNotFoundError:
+        return dict(error="no-credentials-file")
+    except Exception:
+        return dict(error="credentials-file-unreadable")
+
+    try:
         token = creds["claudeAiOauth"]["accessToken"]
-        req   = urllib.request.Request(
+    except KeyError:
+        return dict(error="no-oauth-token")  # e.g. Enterprise/SSO/gateway login, or API-key auth
+
+    try:
+        req = urllib.request.Request(
             "https://api.anthropic.com/api/oauth/usage",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read())
-        fh = data.get("five_hour") or {}
-        sd = data.get("seven_day")  or {}
-        return dict(
-            fh_pct      = fh.get("utilization"),
-            fh_resets_at = fh.get("resets_at", ""),
-            sd_pct      = sd.get("utilization"),
-            sd_resets_at = sd.get("resets_at", ""),
-        )
-    except:
-        return None
+    except urllib.error.HTTPError as e:
+        return dict(error=f"http-{e.code}")  # e.g. 401/403 — invalid token or endpoint not entitled
+    except Exception:
+        return dict(error="network-error")
+
+    fh = data.get("five_hour") or {}
+    sd = data.get("seven_day")  or {}
+    if fh.get("utilization") is None and sd.get("utilization") is None:
+        return dict(error="empty-response")  # reached the API, no usable fields — e.g. Enterprise plan
+
+    return dict(
+        fh_pct       = fh.get("utilization"),
+        fh_resets_at = fh.get("resets_at", ""),
+        sd_pct       = sd.get("utilization"),
+        sd_resets_at = sd.get("resets_at", ""),
+    )
 
 # ── startup registration ──────────────────────────────────────────────────────
 
