@@ -193,6 +193,8 @@ class Monitor(tk.Tk):
         self.attributes("-alpha", 0.95)
         self.configure(bg=self.C["SEP"])
         x = cfg.get("x", 40); y = cfg.get("y", 40)
+        x = max(0, min(x, self.winfo_screenwidth()  - self.W))
+        y = max(0, min(y, self.winfo_screenheight() - self.H))
         self.geometry(f"{self.W}x{self.H}+{x}+{y}")
         self._build()
         self._start()
