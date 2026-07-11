@@ -201,12 +201,17 @@ def load_today():
 
     inp = sum(b[0] for b in buckets.values())
     out = sum(b[1] for b in buckets.values())
+    cr  = sum(b[2] for b in buckets.values())
+    cw  = sum(b[3] for b in buckets.values())
     total = inp + out
     cost = 0.0; confident = True
+    per_model = {}
     for m, b in buckets.items():
         c, ok = _cost(*b, model=m)
         cost += c; confident = confident and ok
-    return dict(total=total, cost=cost, confident=confident, inp=inp, out=out)
+        per_model[m] = dict(inp=b[0], out=b[1], cr=b[2], cw=b[3], cost=c)
+    return dict(total=total, cost=cost, confident=confident, inp=inp, out=out,
+                cr=cr, cw=cw, per_model=per_model)
 
 def load_sess():
     try:
@@ -392,7 +397,14 @@ class Monitor(tk.Tk):
             sess="--", msgs="",
             fh_pct_txt="", fh_cd="", fh_col=self.C["OK"],
             sd_pct_txt="", sd_cd="", sd_col=self.C["OK"],
+            burn_txt="",
         )
+        self._history = []       # [(epoch_seconds, cost), ...] sampled through today, for the sparkline
+        self._history_day = None
+        self._last_today = {}    # full load_today() dict, for the hover breakdown panel
+        self._hover_win = None
+        self._hover_hide_job = None
+        self._hover_zone = None  # (x0, y0, x1, y1) in canvas coords, updated each _layout()
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -441,6 +453,7 @@ class Monitor(tk.Tk):
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>",     self._drag)
         self.canvas.bind("<Button-3>",      self._open_theme_menu)
+        self.canvas.bind("<Motion>",        self._on_hover_motion)
 
         self._build_close()
         self._layout()
@@ -580,12 +593,16 @@ class Monitor(tk.Tk):
         def sep():
             put("│", C["MUT"], FS, before=2, after=8)
 
+        hover_x0 = x
         put("tdy", C["DIM"], FL, after=4)
         put("↑", C["DIM"], FS, after=1)
         put(d["tok_in"], C["A1"], FV, after=4)
         put("↓", C["DIM"], FS, after=1)
         put(d["tok_out"], C["A1"], FV, after=4)
-        put(d["cost"], d["cost_col"], FVS, after=0)
+        put(d["cost"], d["cost_col"], FVS, after=4)
+        put(d["burn_txt"], C["DIM"], FL, after=6)
+        x = self._place_sparkline(x, mid)
+        self._hover_zone = (hover_x0, 0, x, self.H)
 
         sep()
         put("sess", C["DIM"], FL, after=4)
@@ -665,6 +682,97 @@ class Monitor(tk.Tk):
         cv.create_image(x, mid, image=photo, anchor="w", tags=("content",))
         return x + bw + 6
 
+    # today's cost sampled roughly every 3 minutes into self._history --
+    # drawn as a small polyline, min-max normalized to the box. Two points
+    # minimum before anything renders; a flat placeholder dash otherwise so
+    # the slot doesn't silently vanish while data accumulates.
+    SPARK_W = 30; SPARK_H = 13
+
+    def _place_sparkline(self, x, mid):
+        cv, C = self.canvas, self.C
+        w = round(self.SPARK_W * self._scale)
+        h = round(self.SPARK_H * self._scale)
+        y0 = mid - h / 2
+        hist = self._history
+        if len(hist) >= 2:
+            costs = [c for _, c in hist]
+            lo, hi = min(costs), max(costs)
+            span = max(hi - lo, 0.01)
+            n = len(hist)
+            pts = []
+            for i, (_, c) in enumerate(hist):
+                pts.append(x + (i / (n - 1)) * w)
+                pts.append(y0 + h - ((c - lo) / span) * h)
+            cv.create_line(*pts, fill=C["A1"], width=max(1, round(1.3 * self._scale)),
+                           smooth=True, tags=("content",))
+        else:
+            cv.create_line(x, mid, x + w, mid, fill=C["MUT"], width=1, tags=("content",))
+        return x + w
+
+    # ── hover breakdown panel ────────────────────────────────────────────────
+    # Motion-based rather than per-item <Enter>/<Leave>: the content items get
+    # deleted and rebuilt every _layout() call (every 5s tick), and canvas
+    # item enter/leave tracking can go stale across that churn if the pointer
+    # sits still while the underlying item is swapped out. A stored bounding
+    # box compared against live pointer position on every <Motion> event
+    # sidesteps that entirely.
+    def _on_hover_motion(self, e):
+        z = self._hover_zone
+        if z and z[0] <= e.x <= z[2] and z[1] <= e.y <= z[3]:
+            self._show_hover(e)
+        else:
+            self._hide_hover()
+
+    def _show_hover(self, e):
+        if self._hover_hide_job:
+            self.after_cancel(self._hover_hide_job)
+            self._hover_hide_job = None
+        if self._hover_win:
+            return
+        C = self.C
+        info = self._last_today
+        label_face = STYLE_FONT.get(self._style, STYLE_FONT["flat"])[0]
+
+        win = tk.Toplevel(self)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=C["SEP"])
+        frame = tk.Frame(win, bg=C["BG"], padx=10, pady=8)
+        frame.pack(padx=1, pady=1)
+
+        def line(txt, color=C["FG"], bold=False):
+            tk.Label(frame, text=txt, fg=color, bg=C["BG"], anchor="w", justify="left",
+                     font=(label_face, 9, "bold" if bold else "normal")).pack(fill="x")
+
+        line("Today's usage", C["DIM"], bold=True)
+        line(f"Input:        {_k(info.get('inp', 0))} tok")
+        line(f"Output:       {_k(info.get('out', 0))} tok")
+        line(f"Cache read:   {_k(info.get('cr', 0))} tok")
+        line(f"Cache write:  {_k(info.get('cw', 0))} tok")
+        prefix = "" if info.get("confident", True) else "~"
+        line(f"Cost: {prefix}{_fc(info.get('cost', 0))}", C["WARN"], bold=True)
+        per_model = info.get("per_model", {})
+        if len(per_model) > 1:
+            line("per model", C["MUT"])
+            for m, b in per_model.items():
+                line(f"  {m}: {_fc(b['cost'])}", C["DIM"])
+
+        win.update_idletasks()
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.H + round(4 * self._scale)
+        win.geometry(f"+{x}+{y}")
+        self._hover_win = win
+
+    def _hide_hover(self):
+        if self._hover_hide_job:
+            return
+        def do_hide():
+            if self._hover_win:
+                self._hover_win.destroy()
+                self._hover_win = None
+            self._hover_hide_job = None
+        self._hover_hide_job = self.after(120, do_hide)
+
     # ── theme ─────────────────────────────────────────────────────────────────
     def _open_theme_menu(self, e):
         C    = self.C
@@ -737,6 +845,23 @@ class Monitor(tk.Tk):
         d["cost"] = prefix + _fc(t["cost"]); d["cost_col"] = cost_c
         d["sess"] = _k(st) if st else "--"
         d["msgs"] = f"{msgs}msg" if msgs else ""
+
+        now_local = datetime.now()
+        midnight  = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        hours     = max((now_local - midnight).total_seconds() / 3600, 1 / 60)
+        d["burn_txt"] = f"{_fc(t['cost'] / hours)}/hr"
+
+        self._last_today = t
+        today_str = now_local.date().isoformat()
+        if self._history_day != today_str:
+            self._history = []
+            self._history_day = today_str
+        now_epoch = time.time()
+        if not self._history or now_epoch - self._history[-1][0] >= 180:
+            self._history.append((now_epoch, t["cost"]))
+            if len(self._history) > 200:
+                self._history.pop(0)
+
         self._layout()
 
     def _apply_limits(self, lim):
