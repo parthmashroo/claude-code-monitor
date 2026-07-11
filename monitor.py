@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code monitor — single-row floating widget."""
 
-import ctypes, json, subprocess, sys, threading, time, urllib.error, urllib.request, winreg
+import colorsys, ctypes, json, subprocess, sys, threading, time, urllib.error, urllib.request, winreg
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
@@ -70,18 +70,38 @@ def _hex_rgb(h):
     return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
 
 def _mix(hex_a, hex_b, t):
-    """t=0 -> hex_a, t=1 -> hex_b."""
+    """Plain RGB lerp, t=0 -> hex_a, t=1 -> hex_b. Fine for blends toward a
+    neutral (white/black/BG) but muddies transitions between unrelated
+    hues — use _mix_hue for that."""
     ra, ga, ba = _hex_rgb(hex_a)
     rb, gb, bb = _hex_rgb(hex_b)
     return f"#{round(ra+(rb-ra)*t):02x}{round(ga+(gb-ga)*t):02x}{round(ba+(bb-ba)*t):02x}"
 
+def _mix_hue(hex_a, hex_b, t):
+    """Interpolate around the HSL hue wheel (shortest path) instead of
+    straight-line RGB — RGB-lerping between distant hues (cyan->red etc.)
+    crosses through desaturated brown/grey "mud"; going around the wheel
+    keeps every intermediate color as vivid as its endpoints."""
+    ra, ga, ba = _hex_rgb(hex_a)
+    rb, gb, bb = _hex_rgb(hex_b)
+    ha, la, sa = colorsys.rgb_to_hls(ra / 255, ga / 255, ba / 255)
+    hb, lb, sb = colorsys.rgb_to_hls(rb / 255, gb / 255, bb / 255)
+    dh = hb - ha
+    if dh > 0.5: dh -= 1.0
+    elif dh < -0.5: dh += 1.0
+    h = (ha + dh * t) % 1.0
+    l = la + (lb - la) * t
+    s = sa + (sb - sa) * t
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return f"#{round(r*255):02x}{round(g*255):02x}{round(b*255):02x}"
+
 def theme_gradient_stops(C):
-    """A muted spectral sweep grounded in this theme's own accent palette
+    """A vivid spectral sweep grounded in this theme's own accent palette
     (its A1/OK/WARN/HOT hues, already curated), not a generic/universal
-    rainbow — each theme keeps its own character. Blended 55% toward BG so
-    it reads as tinted glass rather than a neon strip."""
+    rainbow — each theme keeps its own character. Blended 40% toward BG so
+    it reads as tinted glass rather than a neon strip, without going muddy."""
     raw = [C["BG"], C["A1"], C["OK"], C["WARN"], C["HOT"], C["BG"]]
-    return [_mix(s, C["BG"], 0.55) for s in raw]
+    return [_mix(s, C["BG"], 0.40) for s in raw]
 
 def _countdown(ts_str):
     try:
@@ -344,11 +364,22 @@ class Monitor(tk.Tk):
         for xx in range(0, w, step):
             t = xx / max(w - 1, 1)
             seg = min(int(t * n), n - 1)
-            color = _mix(stops[seg], stops[seg + 1], (t * n) - seg)
+            # hue-wheel interpolation between stops: RGB-lerping between
+            # unrelated hues (cyan->green->amber->red) crosses through
+            # desaturated brown "mud" — going around the wheel keeps every
+            # intermediate color as clean as its endpoints.
+            color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
             cv.create_rectangle(xx, 0, xx + step, h, fill=color, outline="", tags=("bg",))
-        band_h = max(2, h // 3)  # Liquid-Glass-style light catch near the top edge
-        hl = _mix("#ffffff", self.C["BG"], 0.72)
-        cv.create_rectangle(0, 1, w, 1 + band_h, fill=hl, outline="", stipple="gray25", tags=("bg",))
+        # Liquid-Glass-style light catch: a soft multi-band falloff near the
+        # top edge, not a single flat stripe (and no stipple dithering —
+        # that's a hard 1990s GDI look, not a glass sheen).
+        band_h = max(4, h // 3)
+        bands = 5
+        for i in range(bands):
+            t0, t1 = i / bands, (i + 1) / bands
+            y0, y1 = 1 + t0 * band_h, 1 + t1 * band_h
+            hl = _mix("#ffffff", self.C["BG"], 0.35 + t0 * 0.55)
+            cv.create_rectangle(0, y0, w, y1, fill=hl, outline="", tags=("bg",))
         shadow = _mix("#000000", self.C["BG"], 0.7)
         cv.create_line(0, h - 1, w, h - 1, fill=shadow, tags=("bg",))
         cv.tag_lower("bg")
@@ -378,6 +409,12 @@ class Monitor(tk.Tk):
         def put(text, color, font=FV, before=0, after=4):
             nonlocal x
             x += before
+            # a dark 1px-offset shadow copy behind the real glyph keeps text
+            # readable no matter which gradient color lands underneath it —
+            # without this, DIM/FG text washes out over the lighter zones
+            # of the gradient.
+            shadow = _mix(color, "#000000", 0.8)
+            cv.create_text(x + 1, mid + 1, text=text, fill=shadow, font=font, anchor="w", tags=("content", "shadow"))
             item = cv.create_text(x, mid, text=text, fill=color, font=font, anchor="w", tags=("content",))
             bbox = cv.bbox(item)
             x += (bbox[2] - bbox[0] if bbox else 0) + after
@@ -425,11 +462,24 @@ class Monitor(tk.Tk):
     def _place_bar(self, x, mid, pct_txt, color):
         cv, C = self.canvas, self.C
         bw, bh = self.BAR_W, self.BAR_H
-        y0 = mid - bh // 2
-        cv.create_rectangle(x, y0, x + bw, y0 + bh, fill=C["MUT"], outline=C["FG"], tags=("content",))
+        r = bh / 2
+        y0, y1 = mid - r, mid + r
+        track_col  = _mix(C["MUT"], C["BG"], 0.2)
+        border_col = _mix(C["FG"], C["BG"], 0.6)  # subtle stroke, not a hard bright outline
+        # pill-shaped track: rounded caps + straight body
+        cv.create_oval(x, y0, x + bh, y1, fill=track_col, outline=border_col, tags=("content",))
+        cv.create_oval(x + bw - bh, y0, x + bw, y1, fill=track_col, outline=border_col, tags=("content",))
+        cv.create_rectangle(x + r, y0, x + bw - r, y1, fill=track_col, outline="", tags=("content",))
+        cv.create_line(x + r, y0, x + bw - r, y0, fill=border_col, tags=("content",))
+        cv.create_line(x + r, y1, x + bw - r, y1, fill=border_col, tags=("content",))
         pct = int(pct_txt.rstrip("%")) if pct_txt else 0
-        fw = max(1, round(min(pct, 100) / 100 * (bw - 2))) if pct else 0
-        cv.create_rectangle(x + 1, y0 + 1, x + 1 + fw, y0 + bh - 1, fill=color, outline="", tags=("content",))
+        if pct > 0:
+            fw = max(bh, round(min(pct, 100) / 100 * bw))
+            fy0, fy1 = y0 + 1.5, y1 - 1.5
+            fr = (fy1 - fy0) / 2
+            cv.create_oval(x + 1.5, fy0, x + 1.5 + 2 * fr, fy1, fill=color, outline="", tags=("content",))
+            if fw > bh:
+                cv.create_rectangle(x + 1.5 + fr, fy0, x + fw - 1.5, fy1, fill=color, outline="", tags=("content",))
         return x + bw + 6
 
     # ── theme ─────────────────────────────────────────────────────────────────
