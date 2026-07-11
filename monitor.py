@@ -6,19 +6,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
 
-# 11 themes: 5 categories x 2 (dark, solid/flat, light, glassmorphism,
-# claymorphism) plus one dedicated rainbow/spectrum theme. Each theme
-# carries a render STYLE (THEME_STYLE below) that changes how the surface
-# itself draws, not just its colors -- ONLY the two "glassmorphism" themes
-# get the glass treatment (translucency + blur backdrop + border stroke);
-# dark/solid/light are all plain flat surfaces with zero glass effects.
+# 10 themes, 5 categories x 2 (dark, light, glassmorphism, claymorphism,
+# gradient). Each theme carries a render STYLE (THEME_STYLE below) that
+# changes how the surface itself draws, not just its colors -- ONLY the
+# two "glassmorphism" themes get the glass treatment (translucency + blur
+# backdrop + border stroke); dark/light are plain flat surfaces with zero
+# glass effects. Dropped nord/twilight -- they were a 3rd/4th near-
+# identical "dark + muted accent" variant on top of one-dark/graphite,
+# indistinguishable at a glance; that slot went to a second gradient theme
+# instead, since gradient/color is what was actually being asked for.
 THEMES = {
     # -- dark: plain, moody, no glass --
     "one-dark":        dict(BG="#282c34", SEP="#3e4451", FG="#abb2bf", DIM="#636d83", MUT="#4b5263", OK="#98c379", WARN="#e5c07b", HOT="#e06c75", A1="#56b6c2"),
-    "nord":            dict(BG="#2e3440", SEP="#4c566a", FG="#d8dee9", DIM="#616e88", MUT="#4c566a", OK="#a3be8c", WARN="#ebcb8b", HOT="#bf616a", A1="#88c0d0"),
-    # -- solid / flat, no glass effects --
     "graphite":        dict(BG="#1c1e21", SEP="#3e4248", FG="#dadde1", DIM="#6b7178", MUT="#3e4248", OK="#78c8c0", WARN="#e8b260", HOT="#e87474", A1="#78c8c0"),
-    "twilight":        dict(BG="#1a1625", SEP="#3d3550", FG="#e8e1f0", DIM="#7a6e8a", MUT="#554b69", OK="#a0d2b4", WARN="#e8a05a", HOT="#e4648c", A1="#96b4cc"),
     # -- light / white --
     "linen":           dict(BG="#f5f0e8", SEP="#c0b49c", FG="#3c3732", DIM="#7a6e64", MUT="#b0a090", OK="#3d7a62", WARN="#a05a10", HOT="#a03030", A1="#2a6878"),
     "sakura":          dict(BG="#fdf0f3", SEP="#d8a0b0", FG="#4b3238", DIM="#9a6878", MUT="#c090a0", OK="#3a7850", WARN="#b06010", HOT="#c02848", A1="#2a6090"),
@@ -28,17 +28,24 @@ THEMES = {
     # -- claymorphism (soft embossed dual-shadow, puffy pastel) --
     "clay-peach":      dict(BG="#f2e4d8", SEP="#e0cab8", FG="#5c4433", DIM="#a68b73", MUT="#e8d5c4", OK="#6ba888", WARN="#e0a458", HOT="#d97a6c", A1="#e0916b"),
     "clay-lavender":   dict(BG="#e6e1f5", SEP="#d0c7ec", FG="#3d3358", DIM="#8b7fb0", MUT="#d8d0f0", OK="#6bb894", WARN="#e0a458", HOT="#e0708a", A1="#9b8de0"),
-    # -- rainbow: bold saturated full-surface spectrum, its own render style --
+    # -- gradient: bold saturated surface, clean 3-stop sweeps (see THEME_GRAD) --
     "spectrum":        dict(BG="#15121e", SEP="#3a3350", FG="#ffffff", DIM="#c9c2e0", MUT="#4a4266", OK="#4ee08a", WARN="#ffc857", HOT="#ff5d7a", A1="#5dc9ff"),
+    "sunrise":         dict(BG="#1a1020", SEP="#3d2a45", FG="#ffffff", DIM="#dcc3d8", MUT="#4a3350", OK="#4ee0a0", WARN="#ffb340", HOT="#ff5c9e", A1="#9b5de5"),
 }
 THEME_NAMES = list(THEMES.keys())
 THEME_STYLE = {
-    "one-dark": "flat", "nord": "flat",
-    "graphite": "flat", "twilight": "flat",
+    "one-dark": "flat", "graphite": "flat",
     "linen": "flat", "sakura": "flat",
     "lavender-mist": "glass", "midnight-fintech": "glass",
     "clay-peach": "clay", "clay-lavender": "clay",
-    "spectrum": "rainbow",
+    "spectrum": "rainbow", "sunrise": "rainbow",
+}
+# Curated, clean 3-stop gradients (not a 4-hue full-spectrum cycle, which
+# reads as muddy/busy no matter the interpolation) for the gradient-style
+# themes, modeled directly on the supplied "smooth 2-3 stop" references.
+THEME_GRAD = {
+    "spectrum": ["#7c4fd6", "#2dd4c8", "#e0417f"],  # purple -> teal -> magenta
+    "sunrise":  ["#ff9a56", "#ff5c9e", "#9b5de5"],  # orange -> pink -> purple
 }
 CFG = Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "config.json"
 
@@ -451,13 +458,17 @@ class Monitor(tk.Tk):
         cv.create_line(2, h - 3, w - 2, h - 3, fill=dark, width=4, tags=("bg",))
         cv.create_line(w - 3, 2, w - 3, h - 2, fill=dark, width=4, tags=("bg",))
 
-    # rainbow: the loud, unapologetic option — a bold full-surface HSL
-    # spectrum sweep (not the subtle 40%-toward-BG blend the glass themes
-    # use), for anyone who wants maximum color/personality instead of
-    # restraint.
+    # gradient: the loud, unapologetic option — a bold full-surface sweep
+    # across a *curated 3-stop* gradient (THEME_GRAD), not a 4-hue full-
+    # spectrum cycle. A wider hue cycle looks muddy/busy at this width
+    # regardless of interpolation method; the supplied gradient references
+    # all use clean 2-3 stop transitions. No stipple/dither highlight —
+    # that was a real bug (the 1990s dithered-highlight technique I'd
+    # already removed once, reintroduced by copy-paste) that read as a
+    # dead, muddy band across the top of the bar.
     def _bg_rainbow(self, w, h):
         cv = self.canvas
-        stops = [self.C["A1"], self.C["OK"], self.C["WARN"], self.C["HOT"], self.C["A1"]]
+        stops = THEME_GRAD[self._tname]
         n = len(stops) - 1
         step = 2
         for xx in range(0, w, step):
@@ -465,9 +476,7 @@ class Monitor(tk.Tk):
             seg = min(int(t * n), n - 1)
             color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
             cv.create_rectangle(xx, 0, xx + step, h, fill=color, outline="", tags=("bg",))
-        hl = _mix("#ffffff", self.C["BG"], 0.75)
-        cv.create_rectangle(0, 1, w, h // 3, fill=hl, outline="", stipple="gray50", tags=("bg",))
-        border = _mix("#ffffff", self.C["BG"], 0.2)
+        border = _mix("#ffffff", self.C["BG"], 0.15)
         cv.create_rectangle(0, 0, w - 1, h - 1, outline=border, fill="", tags=("bg",))
 
     def _build_close(self):
@@ -563,9 +572,18 @@ class Monitor(tk.Tk):
             fw = max(bh, round(min(pct, 100) / 100 * bw))
             fy0, fy1 = y0 + 1.5, y1 - 1.5
             fr = (fy1 - fy0) / 2
+            # soft two-tone gradient fill (status color -> a lighter tint of
+            # itself), matching the gradient-pill look in every supplied
+            # reference instead of a flat solid fill.
+            light = _mix(color, "#ffffff", 0.35)
+            step = 2
+            for xx in range(0, fw, step):
+                t = xx / max(fw - 1, 1)
+                gcol = _mix(color, light, t)
+                cv.create_rectangle(x + 1.5 + xx, fy0, x + 1.5 + xx + step, fy1, fill=gcol, outline="", tags=("content",))
             cv.create_oval(x + 1.5, fy0, x + 1.5 + 2 * fr, fy1, fill=color, outline="", tags=("content",))
             if fw > bh:
-                cv.create_rectangle(x + 1.5 + fr, fy0, x + fw - 1.5, fy1, fill=color, outline="", tags=("content",))
+                cv.create_oval(x + fw - 1.5 - 2 * fr, fy0, x + fw - 1.5, fy1, fill=light, outline="", tags=("content",))
         return x + bw + 6
 
     # ── theme ─────────────────────────────────────────────────────────────────
