@@ -19,7 +19,7 @@ THEMES = {
     "sakura":          dict(BG="#fdf0f3", SEP="#d8a0b0", FG="#4b3238", DIM="#9a6878", MUT="#c090a0", OK="#3a7850", WARN="#b06010", HOT="#c02848", A1="#2a6090"),
 }
 THEME_NAMES = list(THEMES.keys())
-CFG = Path.home() / ".claude" / "widgets" / "claude-monitor" / "config.json"
+CFG = Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "config.json"
 
 def load_cfg():
     try: return json.loads(CFG.read_text())
@@ -110,7 +110,7 @@ def load_today():
 def load_sess():
     try:
         s = json.loads(
-            (Path.home() / ".claude" / "widgets" / "claude-monitor" / "session_data.json")
+            (Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "session_data.json")
             .read_text(encoding="utf-8")
         ).get("session", {})
         return s.get("total", 0), s.get("msgs", 0)
