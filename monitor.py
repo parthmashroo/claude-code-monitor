@@ -386,6 +386,7 @@ class Monitor(tk.Tk):
         self._stop = threading.Event()
         self._fh_misses = self._sd_misses = 0
         self._fh_visible = self._sd_visible = True
+        self._fh_user_hidden = self._sd_user_hidden = False  # manual right-click toggle, independent of auto-hide
         self._fh_shown = self._sd_shown = False  # has ever had real data
         self._cur_w = 560
 
@@ -454,6 +455,12 @@ class Monitor(tk.Tk):
         self.canvas.bind("<B1-Motion>",     self._drag)
         self.canvas.bind("<Button-3>",      self._open_theme_menu)
         self.canvas.bind("<Motion>",        self._on_hover_motion)
+        # <Motion> alone only fires while the pointer is over the canvas --
+        # once it leaves entirely (moves to the taskbar, another window),
+        # no more Motion events arrive, so the hover-zone check in
+        # _on_hover_motion never runs again and the panel was staying stuck
+        # open. <Leave> catches exactly that case.
+        self.canvas.bind("<Leave>",         lambda e: self._hide_hover())
 
         self._build_close()
         self._layout()
@@ -601,7 +608,11 @@ class Monitor(tk.Tk):
         put(d["tok_out"], C["A1"], FV, after=4)
         put(d["cost"], d["cost_col"], FVS, after=4)
         put(d["burn_txt"], C["DIM"], FL, after=6)
-        x = self._place_sparkline(x, mid)
+        if len(self._history) >= 2:
+            # only reserve the sparkline's space once there's an actual line
+            # to draw -- with <2 points it was a near-invisible flat dash
+            # that just read as a big unexplained gap before "sess".
+            x = self._place_sparkline(x, mid)
         self._hover_zone = (hover_x0, 0, x, self.H)
 
         sep()
@@ -609,14 +620,14 @@ class Monitor(tk.Tk):
         put(d["sess"], C["FG"], FV, after=4)
         put(d["msgs"], C["DIM"], FL, after=0)
 
-        if self._fh_visible:
+        if self._fh_visible and not self._fh_user_hidden:
             sep()
             put("5h", C["DIM"], FL, after=6)
             x = self._place_bar(x, mid, d["fh_pct_txt"], d["fh_col"], "fh")
             put(d["fh_pct_txt"], d["fh_col"], FVS, after=4)
             put(d["fh_cd"], C["DIM"], FL, after=0)
 
-        if self._sd_visible:
+        if self._sd_visible and not self._sd_user_hidden:
             sep()
             put("7d", C["DIM"], FL, after=6)
             x = self._place_bar(x, mid, d["sd_pct_txt"], d["sd_col"], "sd")
@@ -683,9 +694,10 @@ class Monitor(tk.Tk):
         return x + bw + 6
 
     # today's cost sampled roughly every 3 minutes into self._history --
-    # drawn as a small polyline, min-max normalized to the box. Two points
-    # minimum before anything renders; a flat placeholder dash otherwise so
-    # the slot doesn't silently vanish while data accumulates.
+    # drawn as a small polyline, min-max normalized to the box. Only called
+    # once 2+ points exist (see _layout) -- with fewer, reserving the space
+    # for a barely-visible flat dash just read as an unexplained gap before
+    # "sess", so the slot doesn't exist at all until there's a real line.
     SPARK_W = 30; SPARK_H = 13
 
     def _place_sparkline(self, x, mid):
@@ -694,19 +706,16 @@ class Monitor(tk.Tk):
         h = round(self.SPARK_H * self._scale)
         y0 = mid - h / 2
         hist = self._history
-        if len(hist) >= 2:
-            costs = [c for _, c in hist]
-            lo, hi = min(costs), max(costs)
-            span = max(hi - lo, 0.01)
-            n = len(hist)
-            pts = []
-            for i, (_, c) in enumerate(hist):
-                pts.append(x + (i / (n - 1)) * w)
-                pts.append(y0 + h - ((c - lo) / span) * h)
-            cv.create_line(*pts, fill=C["A1"], width=max(1, round(1.3 * self._scale)),
-                           smooth=True, tags=("content",))
-        else:
-            cv.create_line(x, mid, x + w, mid, fill=C["MUT"], width=1, tags=("content",))
+        costs = [c for _, c in hist]
+        lo, hi = min(costs), max(costs)
+        span = max(hi - lo, 0.01)
+        n = len(hist)
+        pts = []
+        for i, (_, c) in enumerate(hist):
+            pts.append(x + (i / (n - 1)) * w)
+            pts.append(y0 + h - ((c - lo) / span) * h)
+        cv.create_line(*pts, fill=C["A1"], width=max(1, round(1.3 * self._scale)),
+                       smooth=True, tags=("content",))
         return x + w
 
     # ── hover breakdown panel ────────────────────────────────────────────────
@@ -758,9 +767,19 @@ class Monitor(tk.Tk):
                 line(f"  {m}: {_fc(b['cost'])}", C["DIM"])
 
         win.update_idletasks()
+        gap = round(4 * self._scale)
         x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.H + round(4 * self._scale)
-        win.geometry(f"+{x}+{y}")
+        wy = self.winfo_rooty()
+        panel_h = win.winfo_reqheight()
+        below_y = wy + self.H + gap
+        # the widget is often docked near the bottom of the screen -- always
+        # dropping the panel downward let it run off-screen there. Flip to
+        # above the widget when there isn't room below.
+        if below_y + panel_h > self.winfo_screenheight():
+            y = wy - panel_h - gap
+        else:
+            y = below_y
+        win.geometry(f"+{x}+{max(0, y)}")
         self._hover_win = win
 
     def _hide_hover(self):
@@ -779,6 +798,19 @@ class Monitor(tk.Tk):
         menu = tk.Menu(self, tearoff=0, bg=C["BG"], fg=C["FG"],
                        activebackground=C["SEP"], activeforeground=C["FG"],
                        bd=0, relief="flat")
+
+        fh_var = tk.BooleanVar(value=not self._fh_user_hidden)
+        sd_var = tk.BooleanVar(value=not self._sd_user_hidden)
+        def toggle_fh():
+            self._fh_user_hidden = not fh_var.get()
+            self._layout()
+        def toggle_sd():
+            self._sd_user_hidden = not sd_var.get()
+            self._layout()
+        menu.add_checkbutton(label="Show 5h", variable=fh_var, command=toggle_fh, font=("Segoe UI", 9))
+        menu.add_checkbutton(label="Show 7d", variable=sd_var, command=toggle_sd, font=("Segoe UI", 9))
+        menu.add_separator()
+
         for name in THEME_NAMES:
             label = f"* {name}" if name == self._tname else f"  {name}"
             menu.add_command(label=label, font=("Segoe UI", 9),
