@@ -30,23 +30,27 @@ def save_cfg(**kw):
     CFG.parent.mkdir(parents=True, exist_ok=True)
     CFG.write_text(json.dumps(c))
 
-_P = {
-    "claude-opus-4":   (15.00, 75.00, 1.50, 18.75),
-    "claude-sonnet-4": ( 3.00, 15.00, 0.30,  3.75),
-    "claude-haiku-4":  ( 0.80,  4.00, 0.08,  1.00),
-    "claude-opus-3":   (15.00, 75.00, 1.50, 18.75),
-    "claude-sonnet-3": ( 3.00, 15.00, 0.30,  3.75),
-    "claude-haiku-3":  ( 0.25,  1.25, 0.03,  0.30),
+_TIER_PRICE = {
+    "opus":   (15.00, 75.00, 1.50, 18.75),
+    "sonnet": ( 3.00, 15.00, 0.30,  3.75),
+    "haiku":  ( 0.80,  4.00, 0.08,  1.00),
 }
-def _price(m):
-    m = (m or "").lower()
-    for k, v in _P.items():
-        if k in m: return v
-    return (3.00, 15.00, 0.30, 3.75)
+_EXACT_OVERRIDES = {
+    "claude-haiku-3": (0.25, 1.25, 0.03, 0.30),  # only where a real price diverges from its tier
+}
+
+def _price(model_id):
+    m = (model_id or "").lower()
+    if m in _EXACT_OVERRIDES:
+        return _EXACT_OVERRIDES[m], True
+    for tier, price in _TIER_PRICE.items():
+        if tier in m:
+            return price, False
+    return _TIER_PRICE["sonnet"], False
 
 def _cost(i, o, cr, cw, model):
-    pi, po, pcr, pcw = _price(model)
-    return (i*pi + o*po + cr*pcr + cw*pcw) / 1_000_000
+    (pi, po, pcr, pcw), confident = _price(model)
+    return (i*pi + o*po + cr*pcr + cw*pcw) / 1_000_000, confident
 
 def _k(n):
     if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
@@ -80,8 +84,7 @@ def _countdown(ts_str):
 def load_today():
     now   = datetime.now(tz=timezone.utc)
     today = now.astimezone().date()
-    inp = out = cr = cw = 0
-    model = "unknown"; total = 0
+    buckets = {}  # model -> [inp, out, cr, cw]
     for f in (Path.home() / ".claude" / "projects").rglob("*.jsonl"):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fh:
@@ -97,15 +100,21 @@ def load_today():
                         if ts.astimezone().date() != today: continue
                         msg = e.get("message", {})
                         u   = msg.get("usage", {})
-                        i, o   = u.get("input_tokens", 0), u.get("output_tokens", 0)
-                        c_r, c_w = u.get("cache_read_input_tokens", 0), u.get("cache_creation_input_tokens", 0)
-                        inp += i; out += o; cr += c_r; cw += c_w
-                        model = msg.get("model", model)
+                        m   = msg.get("model") or "unknown"
+                        b   = buckets.setdefault(m, [0, 0, 0, 0])
+                        b[0] += u.get("input_tokens", 0)
+                        b[1] += u.get("output_tokens", 0)
+                        b[2] += u.get("cache_read_input_tokens", 0)
+                        b[3] += u.get("cache_creation_input_tokens", 0)
                     except: pass
         except: pass
-    total = inp + out
-    cost  = _cost(inp, out, cr, cw, model)
-    return dict(total=total, cost=cost)
+
+    total = sum(b[0] + b[1] for b in buckets.values())
+    cost = 0.0; confident = True
+    for m, b in buckets.items():
+        c, ok = _cost(*b, model=m)
+        cost += c; confident = confident and ok
+    return dict(total=total, cost=cost, confident=confident)
 
 def load_sess():
     try:
