@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code monitor — single-row floating widget."""
 
-import json, subprocess, sys, threading, time, urllib.error, urllib.request, winreg
+import ctypes, json, subprocess, sys, threading, time, urllib.error, urllib.request, winreg
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
@@ -167,6 +167,10 @@ def fetch_limits():
         sd_resets_at = sd.get("resets_at", ""),
     )
 
+def round_corners(hwnd, w, h, radius=14):
+    region = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w, h, radius, radius)
+    ctypes.windll.user32.SetWindowRgn(hwnd, region, True)
+
 # ── startup registration ──────────────────────────────────────────────────────
 
 def register_startup():
@@ -211,6 +215,9 @@ class Monitor(tk.Tk):
         y = max(0, min(y, self.winfo_screenheight() - self.H))
         self.geometry(f"{self.W}x{self.H}+{x}+{y}")
         self._build()
+        self.update_idletasks()
+        if sys.platform == "win32":
+            round_corners(self.winfo_id(), self.W, self.H)
         self._start()
 
     # ── build ─────────────────────────────────────────────────────────────────
