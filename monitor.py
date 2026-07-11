@@ -66,6 +66,23 @@ def _bar(pct, w=6):
 def _rl_color(pct, C):
     return C["OK"] if pct < 50 else C["WARN"] if pct < 80 else C["HOT"]
 
+def _hex_rgb(h):
+    return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+
+def _mix(hex_a, hex_b, t):
+    """t=0 -> hex_a, t=1 -> hex_b."""
+    ra, ga, ba = _hex_rgb(hex_a)
+    rb, gb, bb = _hex_rgb(hex_b)
+    return f"#{round(ra+(rb-ra)*t):02x}{round(ga+(gb-ga)*t):02x}{round(ba+(bb-ba)*t):02x}"
+
+def theme_gradient_stops(C):
+    """A muted spectral sweep grounded in this theme's own accent palette
+    (its A1/OK/WARN/HOT hues, already curated), not a generic/universal
+    rainbow — each theme keeps its own character. Blended 55% toward BG so
+    it reads as tinted glass rather than a neon strip."""
+    raw = [C["BG"], C["A1"], C["OK"], C["WARN"], C["HOT"], C["BG"]]
+    return [_mix(s, C["BG"], 0.55) for s in raw]
+
 def _countdown(ts_str):
     try:
         ts   = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -180,6 +197,11 @@ def fetch_limits():
 # channel through DWM's composition. Asking DWM to round the corners itself avoids
 # the conflict entirely. No GDI fallback for pre-Win11 — square corners beat broken
 # black-triangle corners.
+#
+# NOTE: true DWM blur-behind/acrylic is gated by the OS-wide "Transparency effects"
+# setting (Settings > Personalization > Colors) — when that's off, Windows forces
+# ALL apps' blur/acrylic to render flat, with no per-app override. The canvas-drawn
+# gradient/highlight below is what carries the glass look when that's the case.
 GLASS_ALPHA = 0xCC  # tint opacity 0-255; lower = more blur showing through
 
 class _ACCENT_POLICY(ctypes.Structure):
@@ -207,7 +229,7 @@ def _legacy_acrylic(hwnd, r, g, b):
     return bool(ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
 
 def _dwm_round_corners(hwnd):
-    pref = ctypes.c_int(3)  # DWMWCP_ROUNDSMALL — MS guidance for small/flyout windows
+    pref = ctypes.c_int(2)  # DWMWCP_ROUND — softer, more "liquid" than ROUNDSMALL on a slim bar
     return ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)) == 0
 
 def apply_glass(hwnd, bg_hex):
@@ -252,150 +274,163 @@ def register_startup():
         pass  # non-fatal
 
 # ── widget ────────────────────────────────────────────────────────────────────
+# Rendered on a single Canvas rather than a row of Label/Frame widgets: each
+# Label has its own flat solid background, so a row of them tiles into a
+# seamed "brick" — there's no way to paint one continuous gradient across
+# widget boundaries. A Canvas is one drawing surface, so the gradient,
+# specular highlight, and shadow edge all read as one continuous material,
+# with text drawn on top of it.
 
 class Monitor(tk.Tk):
-    W = 560; H = 30
+    H = 30
     HIDE_AFTER = 3  # consecutive misses before hiding a rate-limit segment
+    BAR_W = 52; BAR_H = 10
+    PAD_L = 10; PAD_R = 22
 
     def __init__(self):
         super().__init__()
-        cfg         = load_cfg()
-        self._tname = cfg.get("theme", "one-dark")
-        self.C      = THEMES[self._tname]
+        cfg          = load_cfg()
+        self._tname  = cfg.get("theme", "one-dark")
+        self.C       = THEMES[self._tname]
+        self._grad   = theme_gradient_stops(self.C)
         self._limits = {}
         self._dx = self._dy = 0
         self._stop = threading.Event()
         self._fh_misses = self._sd_misses = 0
+        self._fh_visible = self._sd_visible = True
+        self._cur_w = 560
+
+        # cached display state — _layout() redraws entirely from this, so a
+        # relayout (hide/show, tick update) never needs the caller to know
+        # what's already on screen.
+        self._d = dict(
+            tok_in="--", tok_out="--", cost="", cost_col=self.C["WARN"],
+            sess="--", msgs="",
+            fh_pct_txt="", fh_cd="", fh_col=self.C["OK"],
+            sd_pct_txt="", sd_cd="", sd_col=self.C["OK"],
+        )
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", 0.95)
-        self.configure(bg=self.C["SEP"])
+        self.configure(bg=self.C["BG"])
         x = cfg.get("x", 40); y = cfg.get("y", 40)
-        x = max(0, min(x, self.winfo_screenwidth()  - self.W))
+        x = max(0, min(x, self.winfo_screenwidth()  - self._cur_w))
         y = max(0, min(y, self.winfo_screenheight() - self.H))
-        self.geometry(f"{self.W}x{self.H}+{x}+{y}")
-        self._build()
+        self.geometry(f"{self._cur_w}x{self.H}+{x}+{y}")
+
+        self.canvas = tk.Canvas(self, width=self._cur_w, height=self.H,
+                                bg=self.C["BG"], highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<ButtonPress-1>", self._press)
+        self.canvas.bind("<B1-Motion>",     self._drag)
+        self.canvas.bind("<Button-3>",      self._open_theme_menu)
+
+        self._build_close()
+        self._layout()
+
         self.update_idletasks()
         if sys.platform == "win32":
             apply_glass(self.winfo_id(), self.C["BG"])
         self._start()
 
-    # ── build ─────────────────────────────────────────────────────────────────
-    def _lbl(self, parent, text="", color="FG", font=("Consolas", 9)):
-        return tk.Label(parent, text=text, fg=self.C[color],
-                        bg=parent["bg"], font=font)
+    # ── background: gradient + specular highlight + shadow edge ────────────────
+    def _redraw_background(self, w, h):
+        cv = self.canvas
+        cv.delete("bg")
+        stops = self._grad
+        n = len(stops) - 1
+        step = 2
+        for xx in range(0, w, step):
+            t = xx / max(w - 1, 1)
+            seg = min(int(t * n), n - 1)
+            color = _mix(stops[seg], stops[seg + 1], (t * n) - seg)
+            cv.create_rectangle(xx, 0, xx + step, h, fill=color, outline="", tags=("bg",))
+        band_h = max(2, h // 3)  # Liquid-Glass-style light catch near the top edge
+        hl = _mix("#ffffff", self.C["BG"], 0.72)
+        cv.create_rectangle(0, 1, w, 1 + band_h, fill=hl, outline="", stipple="gray25", tags=("bg",))
+        shadow = _mix("#000000", self.C["BG"], 0.7)
+        cv.create_line(0, h - 1, w, h - 1, fill=shadow, tags=("bg",))
+        cv.tag_lower("bg")
 
-    def _build(self):
-        C   = self.C
-        row = tk.Frame(self, bg=C["BG"])
-        row.pack(fill="both", expand=True, padx=1, pady=1)
-        self._row = row
+    def _build_close(self):
+        C, cv = self.C, self.canvas
+        self._close_item = cv.create_text(0, self.H // 2, text="×", fill=C["MUT"],
+                                          font=("Consolas", 10, "bold"), tags=("close",))
+        cv.tag_bind("close", "<Button-1>", lambda e: self._close())
+        cv.tag_bind("close", "<Enter>", lambda e: (cv.itemconfig(self._close_item, fill=C["HOT"]),
+                                                    cv.config(cursor="hand2")))
+        cv.tag_bind("close", "<Leave>", lambda e: (cv.itemconfig(self._close_item, fill=C["MUT"]),
+                                                    cv.config(cursor="")))
 
-        # close button FIRST so tkinter reserves right-side space before left items fill in
-        close_btn = tk.Label(row, text=" × ", fg=C["MUT"], bg=C["BG"],
-                             font=("Consolas", 9, "bold"), cursor="hand2")
-        close_btn.pack(side="right", padx=(0, 2))
-        close_btn.bind("<Button-1>", lambda _: self._close())
-        close_btn.bind("<Enter>",    lambda e: close_btn.config(fg=C["HOT"]))
-        close_btn.bind("<Leave>",    lambda e: close_btn.config(fg=C["MUT"]))
+    # ── layout: manual flex-row over Canvas items, since Canvas has no
+    # geometry manager of its own. Rebuilt from self._d on every data tick
+    # and every visibility change — cheap (~20 text items), and the
+    # background/window only actually redraw/resize if the total width
+    # changed, so a steady-state tick doesn't repaint the gradient.
+    def _layout(self):
+        C, cv, d = self.C, self.canvas, self._d
+        cv.delete("content")
+        mid = self.H // 2
+        FL, FV, FVS, FS = ("Consolas", 8), ("Consolas", 9, "bold"), ("Consolas", 8, "bold"), ("Consolas", 9)
+        x = self.PAD_L
 
-        # drag handle
-        drag = tk.Frame(row, bg=C["BG"], width=6)
-        drag.pack(side="left")
-        drag.bind("<ButtonPress-1>", self._press)
-        drag.bind("<B1-Motion>",     self._drag)
+        def put(text, color, font=FV, before=0, after=4):
+            nonlocal x
+            x += before
+            item = cv.create_text(x, mid, text=text, fill=color, font=font, anchor="w", tags=("content",))
+            bbox = cv.bbox(item)
+            x += (bbox[2] - bbox[0] if bbox else 0) + after
+            return item
 
-        # today tokens (input / output split, ↑ = sent to model, ↓ = received back)
-        self._lbl(row, "tdy", "DIM", ("Consolas", 8)).pack(side="left")
-        self._lbl(row, "↑", "DIM", ("Consolas", 9)).pack(side="left", padx=(4, 0))
-        self._tok_in  = self._lbl(row, "--", "A1", ("Consolas", 9, "bold"))
-        self._tok_in.pack(side="left", padx=(1, 0))
-        self._lbl(row, "↓", "DIM", ("Consolas", 9)).pack(side="left", padx=(4, 0))
-        self._tok_out = self._lbl(row, "--", "A1", ("Consolas", 9, "bold"))
-        self._tok_out.pack(side="left", padx=(1, 0))
-        self._cost = self._lbl(row, "",    "WARN",  ("Consolas", 9))
-        self._cost.pack(side="left", padx=(4, 0))
+        def sep():
+            put("│", C["MUT"], FS, before=2, after=8)
 
-        self._sep1 = self._lbl(row, " | ", "MUT", ("Consolas", 9))
-        self._sep1.pack(side="left")
+        put("tdy", C["DIM"], FL, after=4)
+        put("↑", C["DIM"], FS, after=1)
+        put(d["tok_in"], C["A1"], FV, after=4)
+        put("↓", C["DIM"], FS, after=1)
+        put(d["tok_out"], C["A1"], FV, after=4)
+        put(d["cost"], d["cost_col"], FVS, after=0)
 
-        # session
-        self._lbl(row, "sess", "DIM", ("Consolas", 8)).pack(side="left")
-        self._sess = self._lbl(row, "--",  "FG",  ("Consolas", 9, "bold"))
-        self._sess.pack(side="left", padx=(3, 0))
-        self._msgs = self._lbl(row, "",    "DIM", ("Consolas", 8))
-        self._msgs.pack(side="left", padx=(3, 0))
+        sep()
+        put("sess", C["DIM"], FL, after=4)
+        put(d["sess"], C["FG"], FV, after=4)
+        put(d["msgs"], C["DIM"], FL, after=0)
 
-        # 5h / 7d — each is a self-contained frame (leading separator baked in)
-        # so hiding/showing it is one pack_forget()/pack() call that can't
-        # desync from the rest of the row's packing order.
-        self._fh_frame = self._rl_group(row, "5h")
-        self._fhbar, self._fh_fill, self._fhpct, self._fhcd = self._rl_widgets(self._fh_frame)
-        self._sd_frame = self._rl_group(row, "7d")
-        self._sdbar, self._sd_fill, self._sdpct, self._sdcd = self._rl_widgets(self._sd_frame)
+        if self._fh_visible:
+            sep()
+            put("5h", C["DIM"], FL, after=6)
+            x = self._place_bar(x, mid, d["fh_pct_txt"], d["fh_col"])
+            put(d["fh_pct_txt"], d["fh_col"], FVS, after=4)
+            put(d["fh_cd"], C["DIM"], FL, after=0)
 
-        # make full row draggable + right-click for theme
-        for w in [row, self._tok_in, self._tok_out, self._cost, self._sess, self._msgs,
-                  self._sep1]:
-            w.bind("<ButtonPress-1>", self._press)
-            w.bind("<B1-Motion>",     self._drag)
-            w.bind("<Button-3>",      self._open_theme_menu)
+        if self._sd_visible:
+            sep()
+            put("7d", C["DIM"], FL, after=6)
+            x = self._place_bar(x, mid, d["sd_pct_txt"], d["sd_col"])
+            put(d["sd_pct_txt"], d["sd_col"], FVS, after=4)
+            put(d["sd_cd"], C["DIM"], FL, after=0)
 
-    BAR_W = 52; BAR_H = 10
+        total_w = max(x + self.PAD_R, 120)
+        cv.coords(self._close_item, total_w - 14, mid)
+        if total_w != self._cur_w:
+            self._cur_w = total_w
+            cv.config(width=total_w)
+            self.geometry(f"{total_w}x{self.H}")
+            self._redraw_background(total_w, self.H)
+        cv.tag_raise("content")
+        cv.tag_raise("close")
 
-    def _rl_group(self, row, label_text):
-        """A rate-limit segment: its own leading separator + label, all one
-        unit so hide/show can't leave an orphaned separator or dead space."""
-        C = self.C
-        frame = tk.Frame(row, bg=C["BG"])
-        frame.pack(side="left")
-        sep = self._lbl(frame, " | ", "MUT", ("Consolas", 9))
-        sep.pack(side="left")
-        lbl = self._lbl(frame, label_text, "DIM", ("Consolas", 8))
-        lbl.pack(side="left")
-        for w in (frame, sep, lbl):
-            w.bind("<ButtonPress-1>", self._press)
-            w.bind("<B1-Motion>",     self._drag)
-            w.bind("<Button-3>",      self._open_theme_menu)
-        return frame
-
-    def _rl_widgets(self, frame):
-        C = self.C
-        bar, fill = self._make_bar(frame)
-        pct = self._lbl(frame, "", "A1", ("Consolas", 9, "bold"))
-        pct.pack(side="left", padx=(5, 0))
-        cd = self._lbl(frame, "", "DIM", ("Consolas", 8))
-        cd.pack(side="left", padx=(4, 0))
-        for w in (pct, cd):
-            w.bind("<ButtonPress-1>", self._press)
-            w.bind("<B1-Motion>",     self._drag)
-            w.bind("<Button-3>",      self._open_theme_menu)
-        return bar, fill, pct, cd
-
-    def _make_bar(self, parent):
-        C = self.C
-        canvas = tk.Canvas(parent, width=self.BAR_W, height=self.BAR_H,
-                           bg=parent["bg"], highlightthickness=0)
-        canvas.pack(side="left", padx=(5, 0))
-        canvas.create_rectangle(0, 0, self.BAR_W - 1, self.BAR_H - 1,
-                                fill=C["MUT"], outline=C["FG"])  # visible track border ("finish line")
-        fill_id = canvas.create_rectangle(1, 1, 1, self.BAR_H - 1, fill=C["OK"], outline="")
-        canvas.bind("<ButtonPress-1>", self._press)
-        canvas.bind("<B1-Motion>",     self._drag)
-        canvas.bind("<Button-3>",      self._open_theme_menu)
-        return canvas, fill_id
-
-    def _set_bar(self, canvas, fill_id, pct, color):
-        w = max(1, round(min(pct, 100) / 100 * (self.BAR_W - 2)))
-        canvas.coords(fill_id, 1, 1, 1 + w, self.BAR_H - 1)
-        canvas.itemconfig(fill_id, fill=color)
-
-    def _resize_to_fit(self):
-        self.update_idletasks()
-        req_w = max(self._row.winfo_reqwidth() + 2, 120)
-        if req_w != self.winfo_width():
-            self.geometry(f"{req_w}x{self.H}")
+    def _place_bar(self, x, mid, pct_txt, color):
+        cv, C = self.canvas, self.C
+        bw, bh = self.BAR_W, self.BAR_H
+        y0 = mid - bh // 2
+        cv.create_rectangle(x, y0, x + bw, y0 + bh, fill=C["MUT"], outline=C["FG"], tags=("content",))
+        pct = int(pct_txt.rstrip("%")) if pct_txt else 0
+        fw = max(1, round(min(pct, 100) / 100 * (bw - 2))) if pct else 0
+        cv.create_rectangle(x + 1, y0 + 1, x + 1 + fw, y0 + bh - 1, fill=color, outline="", tags=("content",))
+        return x + bw + 6
 
     # ── theme ─────────────────────────────────────────────────────────────────
     def _open_theme_menu(self, e):
@@ -418,8 +453,11 @@ class Monitor(tk.Tk):
         self._stop.set()
         self.destroy()
 
-    # ── drag ──────────────────────────────────────────────────────────────────
+    # ── drag ─────────────────────────────────────────────────────────────────
     def _press(self, e):
+        item = self.canvas.find_closest(e.x, e.y)
+        if item and "close" in self.canvas.gettags(item[0]):
+            return  # let the close binding handle it, don't start a drag
         self._dx = e.x_root - self.winfo_x()
         self._dy = e.y_root - self.winfo_y()
 
@@ -428,7 +466,7 @@ class Monitor(tk.Tk):
         self.geometry(f"+{x}+{y}")
         save_cfg(x=x, y=y)
 
-    # ── data refresh ──────────────────────────────────────────────────────────
+    # ── data refresh ─────────────────────────────────────────────────────────
     def _start(self):
         def run_local():
             while not self._stop.is_set():
@@ -453,59 +491,45 @@ class Monitor(tk.Tk):
         threading.Thread(target=run_api,   daemon=True).start()
 
     def _apply_local(self, t, st, msgs):
-        C = self.C
+        C, d = self.C, self._d
         cost_c = C["HOT"] if t["cost"] > 10 else C["WARN"] if t["cost"] > 3 else C["OK"]
         prefix = "" if t.get("confident", True) else "~"
-        self._tok_in.config(text=_k(t["inp"]))
-        self._tok_out.config(text=_k(t["out"]))
-        self._cost.config(text=prefix + _fc(t["cost"]), fg=cost_c)
-        self._sess.config(text=_k(st) if st else "--")
-        self._msgs.config(text=f"{msgs}msg" if msgs else "")
+        d["tok_in"] = _k(t["inp"]); d["tok_out"] = _k(t["out"])
+        d["cost"] = prefix + _fc(t["cost"]); d["cost_col"] = cost_c
+        d["sess"] = _k(st) if st else "--"
+        d["msgs"] = f"{msgs}msg" if msgs else ""
         if self._limits:
-            self._apply_limits(self._limits)
+            self._apply_limits(self._limits, relayout=False)
+        self._layout()
 
-    def _apply_limits(self, lim):
-        C = self.C
+    def _apply_limits(self, lim, relayout=True):
+        C, d = self.C, self._d
         fh_pct = lim.get("fh_pct")
         sd_pct = lim.get("sd_pct")
-        resized = False
         if fh_pct is None:
             self._fh_misses += 1
-            if self._fh_misses == self.HIDE_AFTER and self._fh_frame.winfo_manager():
-                self._fh_frame.pack_forget()
-                resized = True
+            if self._fh_misses == self.HIDE_AFTER:
+                self._fh_visible = False
         else:
             self._fh_misses = 0
-            if not self._fh_frame.winfo_manager():
-                # sd sits after fh in the row; if it's currently shown, fh must
-                # be reinserted before it to land back in the right order.
-                if self._sd_frame.winfo_manager():
-                    self._fh_frame.pack(side="left", before=self._sd_frame)
-                else:
-                    self._fh_frame.pack(side="left")
-                resized = True
+            self._fh_visible = True
             pct = int(fh_pct)
             col = _rl_color(pct, C)
-            self._set_bar(self._fhbar, self._fh_fill, pct, col)
-            self._fhpct.config(text=f"{pct}%", fg=col)
-            self._fhcd.config(text=_countdown(lim.get("fh_resets_at", "")))
+            d["fh_pct_txt"] = f"{pct}%"; d["fh_col"] = col
+            d["fh_cd"] = _countdown(lim.get("fh_resets_at", ""))
         if sd_pct is None:
             self._sd_misses += 1
-            if self._sd_misses == self.HIDE_AFTER and self._sd_frame.winfo_manager():
-                self._sd_frame.pack_forget()
-                resized = True
+            if self._sd_misses == self.HIDE_AFTER:
+                self._sd_visible = False
         else:
             self._sd_misses = 0
-            if not self._sd_frame.winfo_manager():
-                self._sd_frame.pack(side="left")  # always last, nothing toggleable follows it
-                resized = True
+            self._sd_visible = True
             pct = int(sd_pct)
             col = _rl_color(pct, C)
-            self._set_bar(self._sdbar, self._sd_fill, pct, col)
-            self._sdpct.config(text=f"{pct}%", fg=col)
-            self._sdcd.config(text=_countdown(lim.get("sd_resets_at", "")))
-        if resized:
-            self._resize_to_fit()
+            d["sd_pct_txt"] = f"{pct}%"; d["sd_col"] = col
+            d["sd_cd"] = _countdown(lim.get("sd_resets_at", ""))
+        if relayout:
+            self._layout()
 
 
 def _make_dpi_aware():
