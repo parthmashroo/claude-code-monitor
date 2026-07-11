@@ -6,12 +6,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tkinter as tk
 
-# Curated to 10 themes across 5 real categories (2 each) instead of 12
-# variations on the same "dark + colorful accent" formula. Each theme also
-# carries a render STYLE (see THEME_STYLE below) that changes how the
-# surface itself is drawn, not just its colors.
+# 11 themes: 5 categories x 2 (dark, solid/flat, light, glassmorphism,
+# claymorphism) plus one dedicated rainbow/spectrum theme. Each theme
+# carries a render STYLE (THEME_STYLE below) that changes how the surface
+# itself draws, not just its colors -- ONLY the two "glassmorphism" themes
+# get the glass treatment (translucency + blur backdrop + border stroke);
+# dark/solid/light are all plain flat surfaces with zero glass effects.
 THEMES = {
-    # -- dark (glass-rendered) --
+    # -- dark: plain, moody, no glass --
     "one-dark":        dict(BG="#282c34", SEP="#3e4451", FG="#abb2bf", DIM="#636d83", MUT="#4b5263", OK="#98c379", WARN="#e5c07b", HOT="#e06c75", A1="#56b6c2"),
     "nord":            dict(BG="#2e3440", SEP="#4c566a", FG="#d8dee9", DIM="#616e88", MUT="#4c566a", OK="#a3be8c", WARN="#ebcb8b", HOT="#bf616a", A1="#88c0d0"),
     # -- solid / flat, no glass effects --
@@ -20,20 +22,23 @@ THEMES = {
     # -- light / white --
     "linen":           dict(BG="#f5f0e8", SEP="#c0b49c", FG="#3c3732", DIM="#7a6e64", MUT="#b0a090", OK="#3d7a62", WARN="#a05a10", HOT="#a03030", A1="#2a6878"),
     "sakura":          dict(BG="#fdf0f3", SEP="#d8a0b0", FG="#4b3238", DIM="#9a6878", MUT="#c090a0", OK="#3a7850", WARN="#b06010", HOT="#c02848", A1="#2a6090"),
-    # -- glassmorphism (dedicated: border stroke + accent stripe + sheen) --
+    # -- glassmorphism (only these two: translucency + blur + border stroke) --
     "lavender-mist":   dict(BG="#edeaf6", SEP="#d8d2ec", FG="#2d2a3d", DIM="#8b84a0", MUT="#c4bedc", OK="#3daa6e", WARN="#e08a3c", HOT="#e0526b", A1="#8b7fe8"),
     "midnight-fintech":dict(BG="#12141c", SEP="#232838", FG="#f4f6fb", DIM="#8890a6", MUT="#2a2f42", OK="#3ed598", WARN="#f0b860", HOT="#ff5c7a", A1="#4a7fff"),
     # -- claymorphism (soft embossed dual-shadow, puffy pastel) --
     "clay-peach":      dict(BG="#f2e4d8", SEP="#e0cab8", FG="#5c4433", DIM="#a68b73", MUT="#e8d5c4", OK="#6ba888", WARN="#e0a458", HOT="#d97a6c", A1="#e0916b"),
     "clay-lavender":   dict(BG="#e6e1f5", SEP="#d0c7ec", FG="#3d3358", DIM="#8b7fb0", MUT="#d8d0f0", OK="#6bb894", WARN="#e0a458", HOT="#e0708a", A1="#9b8de0"),
+    # -- rainbow: bold saturated full-surface spectrum, its own render style --
+    "spectrum":        dict(BG="#15121e", SEP="#3a3350", FG="#ffffff", DIM="#c9c2e0", MUT="#4a4266", OK="#4ee08a", WARN="#ffc857", HOT="#ff5d7a", A1="#5dc9ff"),
 }
 THEME_NAMES = list(THEMES.keys())
 THEME_STYLE = {
-    "one-dark": "glass", "nord": "glass",
+    "one-dark": "flat", "nord": "flat",
     "graphite": "flat", "twilight": "flat",
     "linen": "flat", "sakura": "flat",
     "lavender-mist": "glass", "midnight-fintech": "glass",
     "clay-peach": "clay", "clay-lavender": "clay",
+    "spectrum": "rainbow",
 }
 CFG = Path.home() / ".claude" / "widgets" / "claude-code-monitor" / "config.json"
 
@@ -264,11 +269,14 @@ def _legacy_acrylic(hwnd, r, g, b):
     data.Data        = ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p)
     return bool(ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
 
-def _dwm_round_corners(hwnd):
-    pref = ctypes.c_int(2)  # DWMWCP_ROUND — softer, more "liquid" than ROUNDSMALL on a slim bar
+# DWMWCP_DONOTROUND=1, DWMWCP_ROUND=2, DWMWCP_ROUNDSMALL=3
+_CORNER_PREF = {"glass": 2, "clay": 2, "rainbow": 2, "flat": 3}
+
+def _dwm_round_corners(hwnd, pref_val):
+    pref = ctypes.c_int(pref_val)
     return ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)) == 0
 
-def apply_glass(hwnd, bg_hex, blur=True):
+def apply_glass(hwnd, bg_hex, style="flat"):
     hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT — DWM APIs need the real top-level HWND, not Tk's inner child
     r, g, b = int(bg_hex[1:3], 16), int(bg_hex[3:5], 16), int(bg_hex[5:7], 16)
     dark = (0.299 * r + 0.587 * g + 0.114 * b) < 128
@@ -278,10 +286,10 @@ def apply_glass(hwnd, bg_hex, blur=True):
     except Exception:
         pass
     if is_win11:
-        try: _dwm_round_corners(hwnd)
+        try: _dwm_round_corners(hwnd, _CORNER_PREF.get(style, 3))
         except Exception: pass
-    if not blur:
-        return  # flat/clay themes: rounded corners only, no acrylic backdrop
+    if style != "glass":
+        return  # only dedicated glassmorphism themes get the acrylic backdrop
     try:
         if is_win11 and _dwm_acrylic(hwnd, r, g, b, dark):
             return
@@ -356,16 +364,12 @@ class Monitor(tk.Tk):
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        # Tkinter's -alpha is whole-window: there is no way to make only the
-        # background translucent while keeping text opaque. Dropping it to
-        # 0.80 to chase "background visible" faded the text along with it —
-        # a real regression, not a taste call. Text legibility wins; back to
-        # near-opaque. Genuine background visibility needs real blur-behind
-        # (DwmSetWindowAttribute/SetWindowCompositionAttribute, already
-        # wired in apply_glass), which is gated by the OS Transparency-
-        # effects setting with no per-app override -- not something this
-        # attribute can substitute for.
-        self.attributes("-alpha", 0.97)
+        # -alpha is whole-window (no way to fade only the background while
+        # keeping text opaque -- 0.80 for everyone was a regression, fixed).
+        # Real translucency is glassmorphism's own defining trait, so only
+        # "glass" style themes get a slightly reduced alpha; flat/clay are
+        # explicitly matte/physical materials and stay fully opaque.
+        self.attributes("-alpha", 0.92 if self._style == "glass" else 1.0)
         self.configure(bg=self.C["BG"])
         x = cfg.get("x", 40); y = cfg.get("y", 40)
         x = max(0, min(x, self.winfo_screenwidth()  - self._cur_w))
@@ -384,7 +388,7 @@ class Monitor(tk.Tk):
 
         self.update_idletasks()
         if sys.platform == "win32":
-            apply_glass(self.winfo_id(), self.C["BG"], blur=(self._style == "glass"))
+            apply_glass(self.winfo_id(), self.C["BG"], style=self._style)
         self._start()
 
     # ── background: calm neutral surface + thin gradient accent + shadow edge ──
@@ -397,7 +401,8 @@ class Monitor(tk.Tk):
     def _redraw_background(self, w, h):
         cv = self.canvas
         cv.delete("bg")
-        {"glass": self._bg_glass, "flat": self._bg_flat, "clay": self._bg_clay}[self._style](w, h)
+        {"glass": self._bg_glass, "flat": self._bg_flat, "clay": self._bg_clay,
+         "rainbow": self._bg_rainbow}[self._style](w, h)
         cv.tag_lower("bg")
 
     # dedicated glassmorphism: accent stripe + soft sheen + a visible border
@@ -434,15 +439,36 @@ class Monitor(tk.Tk):
     # claymorphism: soft embossed dual-shadow (light catch on the top-left
     # edge, soft shadow on the bottom-right) on a matte pastel surface —
     # simulates a puffy pressed/extruded surface instead of glass or flat.
+    # Pushed to a much stronger light/dark contrast and thicker lines than
+    # the first pass, which was too subtle to read as "embossed" at 34px.
     def _bg_clay(self, w, h):
         cv = self.canvas
         cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
-        light = _mix("#ffffff", self.C["BG"], 0.45)
-        dark  = _mix("#000000", self.C["BG"], 0.80)
-        cv.create_line(1, 1, w - 1, 1, fill=light, width=2, tags=("bg",))
-        cv.create_line(1, 1, 1, h - 1, fill=light, width=2, tags=("bg",))
-        cv.create_line(1, h - 2, w - 1, h - 2, fill=dark, width=2, tags=("bg",))
-        cv.create_line(w - 2, 1, w - 2, h - 1, fill=dark, width=2, tags=("bg",))
+        light = _mix("#ffffff", self.C["BG"], 0.70)
+        dark  = _mix("#000000", self.C["BG"], 0.55)
+        cv.create_line(2, 2, w - 2, 2, fill=light, width=4, tags=("bg",))
+        cv.create_line(2, 2, 2, h - 2, fill=light, width=4, tags=("bg",))
+        cv.create_line(2, h - 3, w - 2, h - 3, fill=dark, width=4, tags=("bg",))
+        cv.create_line(w - 3, 2, w - 3, h - 2, fill=dark, width=4, tags=("bg",))
+
+    # rainbow: the loud, unapologetic option — a bold full-surface HSL
+    # spectrum sweep (not the subtle 40%-toward-BG blend the glass themes
+    # use), for anyone who wants maximum color/personality instead of
+    # restraint.
+    def _bg_rainbow(self, w, h):
+        cv = self.canvas
+        stops = [self.C["A1"], self.C["OK"], self.C["WARN"], self.C["HOT"], self.C["A1"]]
+        n = len(stops) - 1
+        step = 2
+        for xx in range(0, w, step):
+            t = xx / max(w - 1, 1)
+            seg = min(int(t * n), n - 1)
+            color = _mix_hue(stops[seg], stops[seg + 1], (t * n) - seg)
+            cv.create_rectangle(xx, 0, xx + step, h, fill=color, outline="", tags=("bg",))
+        hl = _mix("#ffffff", self.C["BG"], 0.75)
+        cv.create_rectangle(0, 1, w, h // 3, fill=hl, outline="", stipple="gray50", tags=("bg",))
+        border = _mix("#ffffff", self.C["BG"], 0.2)
+        cv.create_rectangle(0, 0, w - 1, h - 1, outline=border, fill="", tags=("bg",))
 
     def _build_close(self):
         C, cv = self.C, self.canvas
@@ -469,6 +495,12 @@ class Monitor(tk.Tk):
         def put(text, color, font=FV, before=0, after=4):
             nonlocal x
             x += before
+            if self._style == "rainbow":
+                # only the rainbow theme sits text on a busy, saturated
+                # surface -- a dark shadow copy keeps it legible without
+                # imposing that cost on the calm flat/glass/clay themes.
+                shadow = _mix(color, "#000000", 0.8)
+                cv.create_text(x + 1, mid + 1, text=text, fill=shadow, font=font, anchor="w", tags=("content",))
             item = cv.create_text(x, mid, text=text, fill=color, font=font, anchor="w", tags=("content",))
             bbox = cv.bbox(item)
             x += (bbox[2] - bbox[0] if bbox else 0) + after
