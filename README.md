@@ -171,7 +171,7 @@ The Stop hook fires after every Claude response. It reads the session JSONL at `
 ### Startup registration
 
 ```
-Windows  → HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ClaudeCodeMonitor
+Windows  → HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ClaudeMonitor
 macOS    → ~/Library/LaunchAgents/com.claude.monitor.plist
 Linux    → ~/.config/autostart/claude-code-monitor.desktop
 ```
@@ -212,7 +212,7 @@ Stop hook not installed. See [Optional: session stats](#optional-session-stats-s
 Run `python monitor.py` in a terminal (not pythonw) to see errors. Most common: Python without tkinter.
 
 **How do I remove startup?**
-- Windows: delete `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ClaudeCodeMonitor`
+- Windows: delete `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ClaudeMonitor`
 - macOS: delete `~/Library/LaunchAgents/com.claude.monitor.plist`
 - Linux: delete `~/.config/autostart/claude-code-monitor.desktop`
 
