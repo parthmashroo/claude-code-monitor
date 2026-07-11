@@ -167,15 +167,19 @@ def fetch_limits():
         sd_resets_at = sd.get("resets_at", ""),
     )
 
-def round_corners(hwnd, w, h, radius=14):
-    region = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w, h, radius, radius)
-    ctypes.windll.user32.SetWindowRgn(hwnd, region, True)
-
 # ── glassmorphism ─────────────────────────────────────────────────────────────
 # Tier 1: DWM Acrylic backdrop (Win11 22000+) — native, flyout-style blur.
 # Tier 2: SetWindowCompositionAttribute acrylic blur-behind (Win10 1803+, undocumented
 #         but stable and widely relied upon — no official replacement exists pre-Win11).
 # Tier 3: flat alpha transparency (already the default, no action needed).
+#
+# Corner rounding is done via DWMWA_WINDOW_CORNER_PREFERENCE (Win11+), not GDI
+# SetWindowRgn: region-clipping a layered (-alpha) window that also has an acrylic
+# backdrop is a known bad combination — the clipped-off corners paint solid black
+# instead of transparent, because SetWindowRgn's hard clip doesn't carry an alpha
+# channel through DWM's composition. Asking DWM to round the corners itself avoids
+# the conflict entirely. No GDI fallback for pre-Win11 — square corners beat broken
+# black-triangle corners.
 GLASS_ALPHA = 0xCC  # tint opacity 0-255; lower = more blur showing through
 
 class _ACCENT_POLICY(ctypes.Structure):
@@ -202,12 +206,24 @@ def _legacy_acrylic(hwnd, r, g, b):
     data.Data        = ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p)
     return bool(ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
 
+def _dwm_round_corners(hwnd):
+    pref = ctypes.c_int(3)  # DWMWCP_ROUNDSMALL — MS guidance for small/flyout windows
+    return ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)) == 0
+
 def apply_glass(hwnd, bg_hex):
     hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT — DWM APIs need the real top-level HWND, not Tk's inner child
     r, g, b = int(bg_hex[1:3], 16), int(bg_hex[3:5], 16), int(bg_hex[5:7], 16)
     dark = (0.299 * r + 0.587 * g + 0.114 * b) < 128
+    is_win11 = False
     try:
-        if sys.getwindowsversion().build >= 22000 and _dwm_acrylic(hwnd, r, g, b, dark):
+        is_win11 = sys.getwindowsversion().build >= 22000
+    except Exception:
+        pass
+    if is_win11:
+        try: _dwm_round_corners(hwnd)
+        except Exception: pass
+    try:
+        if is_win11 and _dwm_acrylic(hwnd, r, g, b, dark):
             return
     except Exception:
         pass
@@ -262,7 +278,6 @@ class Monitor(tk.Tk):
         self._build()
         self.update_idletasks()
         if sys.platform == "win32":
-            round_corners(self.winfo_id(), self.W, self.H)
             apply_glass(self.winfo_id(), self.C["BG"])
         self._start()
 
@@ -275,6 +290,7 @@ class Monitor(tk.Tk):
         C   = self.C
         row = tk.Frame(self, bg=C["BG"])
         row.pack(fill="both", expand=True, padx=1, pady=1)
+        self._row = row
 
         # close button FIRST so tkinter reserves right-side space before left items fill in
         close_btn = tk.Label(row, text=" × ", fg=C["MUT"], bg=C["BG"],
@@ -290,13 +306,14 @@ class Monitor(tk.Tk):
         drag.bind("<ButtonPress-1>", self._press)
         drag.bind("<B1-Motion>",     self._drag)
 
-        # today tokens (input / output split)
+        # today tokens (input / output split, ↑ = sent to model, ↓ = received back)
         self._lbl(row, "tdy", "DIM", ("Consolas", 8)).pack(side="left")
+        self._lbl(row, "↑", "DIM", ("Consolas", 9)).pack(side="left", padx=(4, 0))
         self._tok_in  = self._lbl(row, "--", "A1", ("Consolas", 9, "bold"))
-        self._tok_in.pack(side="left", padx=(3, 0))
-        self._lbl(row, "/", "MUT", ("Consolas", 9)).pack(side="left")
+        self._tok_in.pack(side="left", padx=(1, 0))
+        self._lbl(row, "↓", "DIM", ("Consolas", 9)).pack(side="left", padx=(4, 0))
         self._tok_out = self._lbl(row, "--", "A1", ("Consolas", 9, "bold"))
-        self._tok_out.pack(side="left")
+        self._tok_out.pack(side="left", padx=(1, 0))
         self._cost = self._lbl(row, "",    "WARN",  ("Consolas", 9))
         self._cost.pack(side="left", padx=(4, 0))
 
@@ -314,11 +331,11 @@ class Monitor(tk.Tk):
         self._sep2.pack(side="left")
 
         # 5h bar
-        self._lbl(row, "5h", "DIM", ("Consolas", 8)).pack(side="left")
-        self._fhbar = self._lbl(row, "░░░░░░", "MUT", ("Consolas", 8))
-        self._fhbar.pack(side="left", padx=(3, 0))
+        self._fh_label = self._lbl(row, "5h", "DIM", ("Consolas", 8))
+        self._fh_label.pack(side="left")
+        self._fhbar, self._fh_fill = self._make_bar(row)
         self._fhpct = self._lbl(row, "",       "A1",  ("Consolas", 8, "bold"))
-        self._fhpct.pack(side="left", padx=(3, 0))
+        self._fhpct.pack(side="left", padx=(4, 0))
         self._fhcd  = self._lbl(row, "",       "DIM", ("Consolas", 8))
         self._fhcd.pack(side="left", padx=(3, 0))
 
@@ -326,22 +343,44 @@ class Monitor(tk.Tk):
         self._sep3.pack(side="left")
 
         # 7d bar
-        self._lbl(row, "7d", "DIM", ("Consolas", 8)).pack(side="left")
-        self._sdbar = self._lbl(row, "░░░░░░", "MUT", ("Consolas", 8))
-        self._sdbar.pack(side="left", padx=(3, 0))
+        self._sd_label = self._lbl(row, "7d", "DIM", ("Consolas", 8))
+        self._sd_label.pack(side="left")
+        self._sdbar, self._sd_fill = self._make_bar(row)
         self._sdpct = self._lbl(row, "",       "A1",  ("Consolas", 8, "bold"))
-        self._sdpct.pack(side="left", padx=(3, 0))
+        self._sdpct.pack(side="left", padx=(4, 0))
         self._sdcd  = self._lbl(row, "",       "DIM", ("Consolas", 8))
         self._sdcd.pack(side="left", padx=(3, 0))
 
         # make full row draggable + right-click for theme
         for w in [row, self._tok_in, self._tok_out, self._cost, self._sess, self._msgs,
-                  self._fhbar, self._fhpct, self._fhcd,
-                  self._sdbar, self._sdpct, self._sdcd,
+                  self._fhbar, self._fhpct, self._fhcd, self._fh_label,
+                  self._sdbar, self._sdpct, self._sdcd, self._sd_label,
                   self._sep1, self._sep2, self._sep3]:
             w.bind("<ButtonPress-1>", self._press)
             w.bind("<B1-Motion>",     self._drag)
             w.bind("<Button-3>",      self._open_theme_menu)
+
+    BAR_W = 44; BAR_H = 8
+
+    def _make_bar(self, parent):
+        C = self.C
+        canvas = tk.Canvas(parent, width=self.BAR_W, height=self.BAR_H,
+                           bg=parent["bg"], highlightthickness=0)
+        canvas.pack(side="left", padx=(4, 0))
+        canvas.create_rectangle(0, 0, self.BAR_W, self.BAR_H, fill=C["MUT"], outline="")
+        fill_id = canvas.create_rectangle(0, 0, 0, self.BAR_H, fill=C["OK"], outline="")
+        return canvas, fill_id
+
+    def _set_bar(self, canvas, fill_id, pct, color):
+        w = round(min(pct, 100) / 100 * self.BAR_W)
+        canvas.coords(fill_id, 0, 0, w, self.BAR_H)
+        canvas.itemconfig(fill_id, fill=color)
+
+    def _resize_to_fit(self):
+        self.update_idletasks()
+        req_w = max(self._row.winfo_reqwidth() + 2, 120)
+        if req_w != self.winfo_width():
+            self.geometry(f"{req_w}x{self.H}")
 
     # ── theme ─────────────────────────────────────────────────────────────────
     def _open_theme_menu(self, e):
@@ -414,28 +453,35 @@ class Monitor(tk.Tk):
         C = self.C
         fh_pct = lim.get("fh_pct")
         sd_pct = lim.get("sd_pct")
+        resized = False
         if fh_pct is None:
             self._fh_misses += 1
-            if self._fh_misses >= self.HIDE_AFTER:
-                self._fhbar.pack_forget(); self._fhpct.pack_forget(); self._fhcd.pack_forget()
+            if self._fh_misses == self.HIDE_AFTER:
+                self._fh_label.pack_forget(); self._fhbar.pack_forget()
+                self._fhpct.pack_forget(); self._fhcd.pack_forget(); self._sep2.pack_forget()
+                resized = True
         else:
             self._fh_misses = 0
             pct = int(fh_pct)
             col = _rl_color(pct, C)
-            self._fhbar.config(text=_bar(pct), fg=col)
+            self._set_bar(self._fhbar, self._fh_fill, pct, col)
             self._fhpct.config(text=f"{pct}%", fg=col)
             self._fhcd.config(text=_countdown(lim.get("fh_resets_at", "")))
         if sd_pct is None:
             self._sd_misses += 1
-            if self._sd_misses >= self.HIDE_AFTER:
-                self._sdbar.pack_forget(); self._sdpct.pack_forget(); self._sdcd.pack_forget()
+            if self._sd_misses == self.HIDE_AFTER:
+                self._sd_label.pack_forget(); self._sdbar.pack_forget()
+                self._sdpct.pack_forget(); self._sdcd.pack_forget(); self._sep3.pack_forget()
+                resized = True
         else:
             self._sd_misses = 0
             pct = int(sd_pct)
             col = _rl_color(pct, C)
-            self._sdbar.config(text=_bar(pct), fg=col)
+            self._set_bar(self._sdbar, self._sd_fill, pct, col)
             self._sdpct.config(text=f"{pct}%", fg=col)
             self._sdcd.config(text=_countdown(lim.get("sd_resets_at", "")))
+        if resized:
+            self._resize_to_fit()
 
 
 if __name__ == "__main__":
