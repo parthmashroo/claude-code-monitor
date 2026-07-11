@@ -40,6 +40,19 @@ THEME_STYLE = {
     "clay-peach": "clay", "clay-lavender": "clay",
     "spectrum": "rainbow", "sunrise": "rainbow",
 }
+# Typography carries character too, not just color -- each style gets a
+# distinct label/value face instead of every theme sharing one font.
+#   flat: plain Segoe UI -- no attitude, just legible.
+#   glass: a Light label face against Semibold values -- thin/airy label,
+#     confident number, matches a translucent surface's delicacy.
+#   clay: Semibold everywhere -- puffy/soft surfaces read as solid, rounded.
+#   rainbow: Black-weight values -- the loud theme gets the loudest type.
+STYLE_FONT = {
+    "flat":    ("Segoe UI",       "Segoe UI Semibold"),
+    "glass":   ("Segoe UI Light", "Segoe UI Semibold"),
+    "clay":    ("Segoe UI Semibold", "Segoe UI Semibold"),
+    "rainbow": ("Segoe UI Semibold", "Segoe UI Black"),
+}
 # Gradient stops for the two "rainbow" themes are pulled from a validated
 # categorical palette (dataviz skill's reference instance) instead of
 # hand-picked hex — each triple checked with scripts/validate_palette.js
@@ -465,23 +478,20 @@ class Monitor(tk.Tk):
         cv.create_line(2, h - 3, w - 2, h - 3, fill=dark, width=4, tags=("bg",))
         cv.create_line(w - 3, 2, w - 3, h - 2, fill=dark, width=4, tags=("bg",))
 
-    # gradient: previously painted the curated 3-stop sweep across the
-    # entire surface -- still looked bad no matter how the colors were
-    # picked, because that mechanism itself is wrong. Studied Raycast's
-    # actual documented design system for the answer: their signature
-    # color moment is a gradient stripe used ONCE, on an otherwise calm
-    # near-black canvas -- "saturated accent colors only inside
-    # illustrations, never on chrome" and "no drop shadows, elevation
-    # comes from a flat surface ladder." Rebuilt on that model: a restrained
-    # near-black canvas + hairline border (matching the rest of the app),
-    # with the curated gradient now confined to a single thin signature
-    # stripe instead of covering the whole bar.
+    # gradient: the 2px stripe (previous pass) took the Raycast lesson too
+    # far — a near-black bar with a hairline of color reads as "the gradient
+    # theme killed its own gradient," not restrained. Raycast's own hero
+    # stripe is a real, visible presence (not 2px) — restraint was about
+    # frequency (once per page), not about making the one moment invisible.
+    # Also softened toward pastel (mix ~22% white) to match the soft, airy
+    # gradient reference supplied — the earlier version was full-saturation,
+    # which reads as harsher than the intended "beautiful gradient" look.
     def _bg_rainbow(self, w, h):
         cv = self.canvas
         cv.create_rectangle(0, 0, w, h, fill=self.C["BG"], outline="", tags=("bg",))
-        stops = THEME_GRAD[self._tname]
+        stops = [_mix(s, "#ffffff", 0.22) for s in THEME_GRAD[self._tname]]
         n = len(stops) - 1
-        stripe_h = 2
+        stripe_h = round(h * 0.66)
         step = 2
         for xx in range(0, w, step):
             t = xx / max(w - 1, 1)
@@ -509,7 +519,8 @@ class Monitor(tk.Tk):
         C, cv, d = self.C, self.canvas, self._d
         cv.delete("content")
         mid = self.H // 2
-        FL, FV, FVS, FS = ("Segoe UI", 9), ("Segoe UI Semibold", 11), ("Segoe UI Semibold", 10), ("Segoe UI", 10)
+        label_face, value_face = STYLE_FONT.get(self._style, STYLE_FONT["flat"])
+        FL, FV, FVS, FS = (label_face, 9), (value_face, 11), (value_face, 10), (label_face, 10)
         x = self.PAD_L
 
         def put(text, color, font=FV, before=0, after=4):
